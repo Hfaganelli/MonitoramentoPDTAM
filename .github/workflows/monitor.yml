@@ -2,7 +2,7 @@ name: Monitor de preços
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # a cada 10 minutos (o GitHub pode atrasar em horários de pico)
+    - cron: "7,37 * * * *"   # a cada 30 minutos
   workflow_dispatch:          # botão "Verificar agora" do painel
     inputs:
       teste_telegram:
