@@ -1,5 +1,5 @@
 {
- "atualizado_em": "2026-09-28T19:41:16+00:00",
+ "atualizado_em": "2026-09-28T19:46:19+00:00",
  "produtos": {
   "amz-8595084742": {
    "historico": [
@@ -14,6 +14,10 @@
     {
      "t": "2026-09-28T19:39:51+00:00",
      "p": 49.78
+    },
+    {
+     "t": "2026-09-28T19:46:13+00:00",
+     "p": 49.78
     }
    ],
    "url": "https://www.amazon.com.br/Hobbit-p%C3%B4ster-J-R-R-Tolkien/dp/8595084742/ref=asc_df_8595084742?mcid=06c875ab489934dda359b47425670d0f&tag=googleshopp00-20&linkCode=df0&hvadid=709883381737&hvpos=&hvnetw=g&hvrand=2689558159218709109&hvpone=&hvptwo=&hvqmt=&hvdev=c&hvdvcmdl=&hvlocint=&hvlocphy=9218936&hvtargid=pla-811119478681&psc=1&hvocijid=2689558159218709109-8595084742-&hvexpln=0&language=pt_BR",
@@ -23,7 +27,7 @@
    "imagem": "https://m.media-amazon.com/images/I/91M9xPIf10L._SL1500_.jpg",
    "preco_alvo": null,
    "disponivel": true,
-   "ultima_verificacao": "2026-09-28T19:39:51+00:00",
+   "ultima_verificacao": "2026-09-28T19:46:13+00:00",
    "erro": null,
    "atual": 49.78,
    "menor": 49.78,
