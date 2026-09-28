@@ -10,15 +10,20 @@ Variáveis de ambiente (todas opcionais):
   TELEGRAM_BOT_TOKEN   token do bot (@BotFather)
   TELEGRAM_CHAT_ID     seu chat id
   ML_ACCESS_TOKEN      token da API do Mercado Livre (se quiser usar a API oficial)
-  ALERTA_QUEDA_PCT     avisa quando o preço cai X% desde a última verificação (padrão 10)
+  ALERTA_QUEDA_PCT     avisa quando o preço (sem cupom) fica X% abaixo do preço normal (padrão 10)
+  ALERTA_CUPOM_PCT     avisa quando um cupom deixa o preço X% abaixo do preço normal (padrão 20)
+
+"Preço normal" = mediana do preço nos últimos 7 dias (ignora oscilações rápidas).
 """
+import copy
 import json
 import os
+import statistics
 import random
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
@@ -38,11 +43,19 @@ HISTORY_FILE = ROOT / "data" / "history.json"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 ML_TOKEN = os.getenv("ML_ACCESS_TOKEN", "").strip()
-try:
-    QUEDA_PCT = float(os.getenv("ALERTA_QUEDA_PCT") or 10)
-except ValueError:
-    QUEDA_PCT = 10.0
-MAX_PONTOS = 3000  # pontos de histórico guardados por produto
+def _pct(nome, padrao):
+    try:
+        return float(os.getenv(nome) or padrao)
+    except ValueError:
+        return float(padrao)
+
+
+QUEDA_PCT = _pct("ALERTA_QUEDA_PCT", 10)
+CUPOM_PCT = _pct("ALERTA_CUPOM_PCT", 20)
+DIAS_NORMAL = 7        # janela do "preço normal"
+MAX_PONTOS = 4000      # pontos de histórico por produto
+PONTO_MIN_INTERVALO = timedelta(hours=1)   # sem mudança, grava 1 ponto por hora
+SALVAR_MIN_INTERVALO = timedelta(minutes=30)  # sem mudança, salva o arquivo a cada 30 min
 
 
 class ErroColeta(Exception):
@@ -127,6 +140,69 @@ def id_produto(p):
     if m:
         return "ml-MLB" + m.group(1)
     return "p-" + str(abs(hash(url)) % 10**10)
+
+
+# ---------------------------------------------------------------------- Cupons
+
+_VALOR = r"([\d.]+(?:,\d{1,2})?)"
+RE_MINIMO = re.compile(r"(?:acima de|a partir de|m[ií]nim[oa] de|compras? de|pedidos? de)\s*R\$\s*" + _VALOR, re.I)
+RE_TETO = re.compile(r"(?:at[ée]|limite de|m[áa]ximo de)\s*R\$\s*" + _VALOR, re.I)
+RE_PCT = re.compile(r"(\d{1,2}(?:[.,]\d+)?)\s*%")
+RE_REAIS = re.compile(
+    r"R\$\s*" + _VALOR + r"\s*(?:de\s*)?(?:OFF|de desconto|desconto)"
+    + r"|cupom\s*(?:de\s*)?(?:desconto\s*(?:de\s*)?)?R\$\s*" + _VALOR
+    + r"|economize\s*R\$\s*" + _VALOR, re.I)
+RE_NAO_APLICAVEL = re.compile(r"ganhe|receba|pr[óo]xima compra|indicar|indique|primeira compra no app", re.I)
+
+
+def analisar_cupom(texto, preco):
+    """Lê um texto de cupom ('Aplicar cupom de 15%', 'R$ 50 OFF com cupom') e calcula o preço final."""
+    t = " ".join((texto or "").split())
+    if not preco or not re.search(r"cupo[mn]|coupon", t, re.I) or RE_NAO_APLICAVEL.search(t):
+        return None
+    m = RE_MINIMO.search(t)
+    if m and (parse_brl(m.group(1)) or 0) > preco:
+        return None  # exige compra mínima maior que o preço do produto
+    teto = RE_TETO.search(t)
+    teto = parse_brl(teto.group(1)) if teto else None
+    limpo = RE_MINIMO.sub(" ", RE_TETO.sub(" ", t))
+
+    desconto = None
+    m = RE_PCT.search(limpo)
+    if m:
+        pct = float(m.group(1).replace(",", "."))
+        if 0 < pct < 100:
+            desconto = preco * pct / 100
+            if teto:
+                desconto = min(desconto, teto)
+    else:
+        m = RE_REAIS.search(limpo)
+        if m:
+            desconto = parse_brl(next(g for g in m.groups() if g))
+    if not desconto or desconto >= preco:
+        return None
+    return {"descricao": t[:140], "desconto": round(desconto, 2),
+            "preco_final": round(preco - desconto, 2)}
+
+
+def melhor_cupom(soup, preco, seletores):
+    vistos, melhor = set(), None
+    for sel in seletores:
+        for el in soup.select(sel):
+            txt = el.get_text(" ", strip=True)
+            if not txt or len(txt) > 400 or txt in vistos:
+                continue
+            vistos.add(txt)
+            c = analisar_cupom(txt, preco)
+            if c and (melhor is None or c["desconto"] > melhor["desconto"]):
+                melhor = c
+    return melhor
+
+
+CUPOM_AMAZON = ['[id*="oupon"]', '[class*="oupon"]', "#promoPriceBlockMessage_feature_div",
+                "#vpcButton", '[id^="promoMessage"]']
+CUPOM_ML = ['[class*="coupon"]', '[class*="cupom"]', '[id*="coupon"]', ".ui-pdp-promotions-pill-label",
+            ".andes-tag"]
 
 
 # ---------------------------------------------------------------------- Amazon
@@ -218,7 +294,8 @@ def amazon(url):
             raise ErroColeta("Página da Amazon veio sem produto (possível bloqueio).")
         raise ErroColeta("Preço não encontrado na página da Amazon.")
 
-    return {"titulo": titulo, "imagem": imagem, "preco": preco,
+    cupom = melhor_cupom(soup, preco, CUPOM_AMAZON) if preco else None
+    return {"titulo": titulo, "imagem": imagem, "preco": preco, "cupom": cupom,
             "disponivel": bool(preco) and not indisponivel}
 
 
@@ -353,22 +430,39 @@ def mercadolivre(url):
     if not preco and disponivel:
         raise ErroColeta("Preço não encontrado na página do Mercado Livre.")
 
-    return {"titulo": titulo, "imagem": imagem, "preco": preco,
+    cupom = melhor_cupom(soup, preco, CUPOM_ML) if preco else None
+    return {"titulo": titulo, "imagem": imagem, "preco": preco, "cupom": cupom,
             "disponivel": disponivel and bool(preco)}
 
 
 # ------------------------------------------------------------------ Telegram
 
 def telegram(texto):
+    """Envia mensagem. Retorna (ok, detalhe)."""
     if not (TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
-        return
+        return False, "secrets TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID não configurados"
+    token = TELEGRAM_TOKEN.removeprefix("bot").strip().strip('"').strip("'")
     try:
-        http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                  json={"chat_id": TELEGRAM_CHAT_ID, "text": texto,
-                        "parse_mode": "HTML", "disable_web_page_preview": False},
-                  timeout=20)
+        r = http.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                      json={"chat_id": TELEGRAM_CHAT_ID.strip().strip('"'), "text": texto,
+                            "parse_mode": "HTML", "disable_web_page_preview": False},
+                      timeout=20)
+        if r.status_code == 200:
+            return True, "ok"
+        try:
+            desc = r.json().get("description", r.text[:200])
+        except Exception:
+            desc = r.text[:200]
+        dicas = {401: "token inválido: confira TELEGRAM_BOT_TOKEN",
+                 404: "token inválido: confira TELEGRAM_BOT_TOKEN",
+                 400: "chat não encontrado: confira TELEGRAM_CHAT_ID e se você mandou uma mensagem ao bot",
+                 403: "o bot foi bloqueado ou você ainda não iniciou conversa com ele"}
+        msg = f"Telegram recusou (HTTP {r.status_code}): {desc}. {dicas.get(r.status_code, '')}"
+        print("   " + msg)
+        return False, msg
     except Exception as e:
         print(f"   Falha ao enviar Telegram: {e}")
+        return False, str(e)
 
 
 def brl(v):
@@ -393,10 +487,47 @@ def carregar(caminho, padrao):
         return padrao
 
 
+def _dt(iso):
+    try:
+        return datetime.fromisoformat(iso)
+    except Exception:
+        return None
+
+
+def preco_normal(historico, agora, dias=DIAS_NORMAL):
+    """Mediana do preço nos últimos N dias, amostrada de hora em hora (ponderada pelo tempo)."""
+    pts = [(_dt(x["t"]), x["p"]) for x in historico if x.get("p") and _dt(x.get("t"))]
+    if not pts:
+        return None
+    inicio = max(agora - timedelta(days=dias), pts[0][0])
+    amostras, i, atual = [], 0, pts[0][1]
+    t = inicio
+    while t <= agora:
+        while i < len(pts) and pts[i][0] <= t:
+            atual = pts[i][1]
+            i += 1
+        amostras.append(atual)
+        t += timedelta(hours=1)
+    if len(amostras) < 2:
+        return pts[-1][1]
+    return round(statistics.median(amostras), 2)
+
+
+def _sem_horarios(h):
+    h = copy.deepcopy(h)
+    h.pop("atualizado_em", None)
+    for r in h.get("produtos", {}).values():
+        for k in ("ultima_verificacao", "ultima_falha"):
+            r.pop(k, None)
+    return h
+
+
 def main():
     produtos = carregar(PRODUCTS_FILE, [])
     hist = carregar(HISTORY_FILE, {"atualizado_em": None, "produtos": {}})
     hist.setdefault("produtos", {})
+    original = copy.deepcopy(hist)
+    agora = datetime.now(timezone.utc)
 
     ok = falhas = 0
     vistos = set()
@@ -416,13 +547,14 @@ def main():
             falhas += 1
             reg.update({"url": p["url"], "erro": str(e), "ultima_falha": agora_iso()})
             print(f"   ✗ {e}")
-            time.sleep(3 + random.random() * 4)
+            time.sleep(2 + random.random() * 3)
             continue
 
         ok += 1
         preco = dados.get("preco")
-        anterior = reg.get("atual")
+        cupom = dados.get("cupom")
         alvo = numero(p.get("preco_alvo"))
+        normal = preco_normal(reg.get("historico", []), agora)  # calculado ANTES da leitura nova
 
         reg.update({
             "url": p["url"],
@@ -434,48 +566,103 @@ def main():
             "disponivel": dados.get("disponivel", True),
             "ultima_verificacao": agora_iso(),
             "erro": None,
+            "cupom": cupom,
+            "preco_normal": normal,
         })
 
-        if preco:
-            reg["historico"].append({"t": agora_iso(), "p": round(preco, 2)})
-            reg["historico"] = reg["historico"][-MAX_PONTOS:]
-            reg["atual"] = round(preco, 2)
-            precos = [x["p"] for x in reg["historico"]]
-            reg["menor"], reg["maior"] = min(precos), max(precos)
-            print(f"   ✓ {brl(preco)}" + (f" (antes {brl(anterior)})" if anterior else ""))
-
-            motivos = []
-            if alvo:
-                if preco <= alvo:
-                    ult = reg.get("ultimo_alerta")
-                    if ult is None or preco < ult:
-                        motivos.append(f"🎯 Atingiu seu preço-alvo de {brl(alvo)}")
-                        reg["ultimo_alerta"] = preco
-                else:
-                    reg["ultimo_alerta"] = None  # volta a avisar quando cair de novo
-            if anterior and preco <= anterior * (1 - QUEDA_PCT / 100):
-                queda = (1 - preco / anterior) * 100
-                motivos.append(f"📉 Caiu {queda:.0f}% (era {brl(anterior)})")
-            if len(precos) > 3 and preco < min(precos[:-1]):
-                motivos.append("🏆 Menor preço já registrado")
-
-            if motivos:
-                telegram(f"<b>{reg['nome']}</b>\n{brl(preco)}\n" + "\n".join(motivos)
-                         + f"\n\n{p['url']}")
-        else:
+        if not preco:
             reg["atual"] = None
             print("   – indisponível no momento")
+            time.sleep(2 + random.random() * 3)
+            continue
 
-        time.sleep(4 + random.random() * 6)  # educado com as lojas
+        # histórico: grava ponto quando o preço/cupom muda, ou 1 por hora
+        h = reg.setdefault("historico", [])
+        ponto = {"t": agora_iso(), "p": round(preco, 2)}
+        if cupom:
+            ponto["c"] = cupom["preco_final"]
+        ult = h[-1] if h else None
+        if (not ult or ult.get("p") != ponto["p"] or ult.get("c") != ponto.get("c")
+                or agora - (_dt(ult["t"]) or agora) >= PONTO_MIN_INTERVALO):
+            h.append(ponto)
+            reg["historico"] = h[-MAX_PONTOS:]
+        reg["atual"] = round(preco, 2)
+        precos = [x["p"] for x in reg["historico"]]
+        reg["menor"], reg["maior"] = min(precos), max(precos)
 
-    hist["atualizado_em"] = agora_iso()
-    HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    HISTORY_FILE.write_text(json.dumps(hist, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"\nConcluído: {ok} ok, {falhas} com falha.")
+        txt = f"   ✓ {brl(preco)}"
+        if normal:
+            txt += f" (normal {brl(normal)})"
+        if cupom:
+            txt += f" | com cupom {brl(cupom['preco_final'])}"
+        print(txt)
+
+        motivos = []
+        # 1) queda sem cupom
+        if normal:
+            if preco <= normal * (1 - QUEDA_PCT / 100):
+                ultimo = reg.get("alerta_queda")
+                if ultimo is None or preco <= ultimo * 0.99:  # só repete se cair mais 1%
+                    pct = (1 - preco / normal) * 100
+                    motivos.append(f"📉 {pct:.0f}% abaixo do preço normal ({brl(normal)}), sem cupom")
+                    reg["alerta_queda"] = preco
+            else:
+                reg["alerta_queda"] = None
+
+        # 2) cupom que derruba o preço
+        if normal and cupom and cupom["preco_final"] <= normal * (1 - CUPOM_PCT / 100):
+            ultimo = reg.get("alerta_cupom")
+            if ultimo is None or cupom["preco_final"] <= ultimo * 0.99:
+                pct = (1 - cupom["preco_final"] / normal) * 100
+                motivos.append(f"🎟️ Cupom na página: {brl(cupom['preco_final'])} com cupom "
+                               f"({pct:.0f}% abaixo do normal de {brl(normal)})\n“{cupom['descricao'][:90]}”")
+                reg["alerta_cupom"] = cupom["preco_final"]
+        else:
+            reg["alerta_cupom"] = None
+
+        # 3) preço-alvo (se você definiu um)
+        if alvo:
+            final = min(preco, cupom["preco_final"]) if cupom else preco
+            if final <= alvo:
+                ultimo = reg.get("ultimo_alerta")
+                if ultimo is None or final < ultimo:
+                    motivos.append(f"🎯 Atingiu seu preço-alvo de {brl(alvo)}")
+                    reg["ultimo_alerta"] = final
+            else:
+                reg["ultimo_alerta"] = None
+
+        if motivos:
+            telegram(f"<b>{reg['nome']}</b>\nAgora: {brl(preco)}\n\n" + "\n".join(motivos)
+                     + f"\n\n{p['url']}")
+
+        time.sleep(2 + random.random() * 4)  # educado com as lojas
+
+    # só salva se algo mudou de verdade, ou a cada 30 min (evita commits a cada 10 min à toa)
+    ultimo_save = _dt(original.get("atualizado_em") or "")
+    mudou = _sem_horarios(hist) != _sem_horarios(original)
+    if mudou or not ultimo_save or agora - ultimo_save >= SALVAR_MIN_INTERVALO:
+        hist["atualizado_em"] = agora_iso()
+        HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        HISTORY_FILE.write_text(json.dumps(hist, ensure_ascii=False, separators=(",", ":")),
+                                encoding="utf-8")
+        print("\nHistórico salvo.")
+    else:
+        print("\nNada mudou; histórico não precisa ser salvo agora.")
+    print(f"Concluído: {ok} ok, {falhas} com falha.")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) >= 3 and sys.argv[1] == "--teste":
+    if len(sys.argv) >= 2 and sys.argv[1] == "--telegram-teste":
+        print(f"Token configurado: {'sim' if TELEGRAM_TOKEN else 'NÃO'} "
+              f"({len(TELEGRAM_TOKEN)} caracteres) | Chat ID configurado: "
+              f"{'sim' if TELEGRAM_CHAT_ID else 'NÃO'}")
+        ok, detalhe = telegram("✅ Monitor de preços conectado. Os alertas vão chegar aqui.")
+        if ok:
+            print("Mensagem de teste enviada com sucesso.")
+        else:
+            print(f"ERRO: {detalhe}")
+            sys.exit(1)
+    elif len(sys.argv) >= 3 and sys.argv[1] == "--teste":
         try:
             loja, d = coletar(sys.argv[2])
             print(json.dumps({"loja": loja, **d}, ensure_ascii=False, indent=2))
