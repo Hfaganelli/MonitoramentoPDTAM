@@ -268,11 +268,26 @@ async function buscarJSON(caminho){
   }
   return null;
 }
+function semDuplicados(lista){
+  const vistos = new Set();
+  return lista.filter(x => {
+    if (!x || !x.url) return false;
+    if (!x.id) x.id = idDe(x);
+    if (vistos.has(x.id)) return false;
+    vistos.add(x.id); return true;
+  });
+}
+async function lerProdutosAPI(){
+  const f = await gh(`/contents/products.json?ref=${encodeURIComponent(cfg.branch)}&t=${Date.now()}`);
+  return {f, lista: JSON.parse(b64dec(f.content) || "[]")};
+}
 async function carregar(){
-  const [p, h] = await Promise.all([buscarJSON("products.json"), buscarJSON("data/history.json")]);
-  produtos = Array.isArray(p) ? p : [];
+  const pProd = cfg.token && cfg.owner
+    ? lerProdutosAPI().then(r => r.lista).catch(() => buscarJSON("products.json"))
+    : buscarJSON("products.json");
+  const [p, h] = await Promise.all([pProd, buscarJSON("data/history.json")]);
+  produtos = semDuplicados(Array.isArray(p) ? p : []);
   hist = h && h.produtos ? h : {produtos:{}};
-  produtos.forEach(x => { if (!x.id) x.id = idDe(x); });
   render();
 }
 
@@ -301,9 +316,9 @@ async function gravarProdutos(transform, mensagem){
   let novo;
   for (let tentativa = 0; ; tentativa++) {
     // lê sempre a versão mais recente (sem cache) para evitar o erro 409
-    const f = await gh(`/contents/products.json?ref=${encodeURIComponent(cfg.branch)}&t=${Date.now()}`);
-    const atual = JSON.parse(b64dec(f.content) || "[]");
-    novo = transform(atual);
+    const {f, lista: atual} = await lerProdutosAPI();
+    novo = semDuplicados(transform(semDuplicados(atual)));
+    if (JSON.stringify(novo) === JSON.stringify(atual)) break; // nada mudou
     try {
       await gh(`/contents/products.json`, {method:"PUT", body: JSON.stringify({
         message: mensagem, content: b64enc(JSON.stringify(novo, null, 2) + "\n"), sha: f.sha, branch: cfg.branch
@@ -314,7 +329,7 @@ async function gravarProdutos(transform, mensagem){
       await new Promise(r => setTimeout(r, 1500 * (tentativa + 1)));
     }
   }
-  produtos = novo; produtos.forEach(x => { if (!x.id) x.id = idDe(x); });
+  produtos = novo;
   render();
 }
 
@@ -475,13 +490,15 @@ $("#formCfg").onsubmit = ev => {
   salvarCfg(); $("#dlgCfg").close(); toast("Configuração salva."); carregar();
 };
 
+let salvando = false;
 $("#formProd").onsubmit = async ev => {
   ev.preventDefault();
+  if (salvando) return;
   const url = $("#fUrl").value.trim();
   const alvo = $("#fAlvo").value ? Number($("#fAlvo").value) : null;
   const nome = $("#fNome").value.trim();
   if (!loja(url)) { toast("Use um link da Amazon ou do Mercado Livre."); return; }
-  const btn = $("#btnSaveProd"); btn.disabled = true;
+  const btn = $("#btnSaveProd"); btn.disabled = true; salvando = true;
   try {
     if (editando) {
       const id = editando.id;
@@ -491,13 +508,17 @@ $("#formProd").onsubmit = async ev => {
     } else {
       const novo = {url, preco_alvo: alvo}; if (nome) novo.nome = nome;
       novo.id = idDe(novo) || ("p-" + Date.now());
-      if (produtos.some(x => x.id === novo.id)) { toast("Esse produto já está na lista."); btn.disabled = false; return; }
-      await gravarProdutos(lista => [...lista, novo], `Adiciona produto: ${nome || url.slice(0,60)}`);
-      toast("Produto adicionado. A primeira verificação começa em instantes.", 5500);
+      let jaExistia = false;
+      await gravarProdutos(lista => {
+        if (lista.some(x => x.id === novo.id)) { jaExistia = true; return lista; }
+        return [...lista, novo];
+      }, `Adiciona produto: ${nome || url.slice(0,60)}`);
+      toast(jaExistia ? "Esse produto já está na lista."
+                      : "Produto adicionado. A primeira verificação começa em instantes.", 5500);
     }
     $("#dlgProd").close();
   } catch(e) { toast(e.message, 6000); }
-  btn.disabled = false;
+  btn.disabled = false; salvando = false;
 };
 
 $("#btnRun").onclick = async () => {
