@@ -22,5 +22,11 @@
     "preco_alvo": null,
     "nome": "Coisa de rico",
     "id": "amz-6556928585"
+  },
+  {
+    "url": "https://www.amazon.com.br/gp/product/8535930043/ref=ox_sc_act_title_5?smid=A1ZZFT5FULY4LN&psc=1",
+    "preco_alvo": null,
+    "nome": "Guerra e Paz",
+    "id": "amz-8535930043"
   }
 ]
