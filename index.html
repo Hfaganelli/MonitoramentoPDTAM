@@ -73,6 +73,7 @@ h1{font-size:clamp(2.2rem,6vw,3.4rem);line-height:1;margin:0;font-weight:800;
 .delta.down{color:var(--down);font-weight:650}
 .delta.up{color:var(--up);font-weight:650}
 .err{color:var(--up)}
+.coupon{color:var(--down);font-weight:650}
 .spark{display:block;width:100%;max-width:420px;height:46px;margin-top:8px;cursor:pointer}
 .row-actions{display:flex;gap:2px;margin-top:6px;flex-wrap:wrap}
 .row-actions .btn{padding:3px 8px;font-size:.8rem}
@@ -176,7 +177,7 @@ input:focus{border-color:var(--focus);outline:none}
         <input id="fNome" type="text" placeholder="Opcional">
       </div>
     </div>
-    <p class="small">Você recebe aviso no Telegram quando o preço chegar ao alvo.</p>
+    <p class="small">Você recebe aviso no Telegram quando o preço cair 10% abaixo do normal, quando um cupom derrubar 20% ou quando chegar ao alvo.</p>
     <div class="dlg-actions">
       <button class="btn ghost" value="cancel" type="button" data-close>Cancelar</button>
       <button class="btn primary" id="btnSaveProd" type="submit">Salvar produto</button>
@@ -388,7 +389,7 @@ function render(){
 
   if (!produtos.length) {
     list.innerHTML = `<div class="empty-state"><h2>Comece por um produto</h2>
-      <p>Cole o link de algo que você quer comprar na Amazon ou no Mercado Livre. O robô confere o preço a cada 4 horas e avisa quando baixar.</p>
+      <p>Cole o link de algo que você quer comprar na Amazon ou no Mercado Livre. O robô confere o preço a cada 10 minutos e avisa quando baixar.</p>
       <button class="btn primary" type="button" data-act="add">Adicionar produto</button></div>`;
     return;
   }
@@ -415,14 +416,17 @@ function render(){
     const detalhe = aberto === p.id ? `<div class="detail">
         <div class="chart-wrap">${grafico(pts, alvo, 900, 220, true)}<div class="tip" hidden></div></div>
         <div class="stats">
+          <span>Preço normal (7 dias) <b>${brl(r?.preco_normal)}</b></span>
           <span>Menor <b>${brl(r?.menor)}</b></span><span>Maior <b>${brl(r?.maior)}</b></span>
           <span>Leituras <b>${pts.length}</b></span><span>Verificado <b>${quando(r?.ultima_verificacao)}</b></span>
-        </div>${r?.erro ? `<p class="small err">Último erro: ${esc(r.erro)}</p>` : ""}</div>` : "";
+        </div>${r?.cupom ? `<p class="small">Cupom na página: “${esc(r.cupom.descricao)}”</p>` : ""}${r?.erro ? `<p class="small err">Último erro: ${esc(r.erro)}</p>` : ""}</div>` : "";
     return `<article class="item" data-id="${esc(p.id)}">
       ${img}
       <div class="info">
         <h3 class="name"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(nome)}</a></h3>
         <div class="meta"><span class="store">${nomeLoja(l)}</span>${delta}${
+          r?.cupom ? `<span class="coupon" title="${esc(r.cupom.descricao)}">🎟️ ${brl(r.cupom.preco_final)} com cupom</span>` : ""}${
+          r?.preco_normal ? `<span>normal ${brl(r.preco_normal)}</span>` : ""}${
           r?.menor != null ? `<span>menor ${brl(r.menor)}</span>` : ""}${erro}</div>
         <div data-act="toggle" title="Ver histórico">${grafico(pts, alvo, 420, 46, false)}</div>
         <div class="row-actions">
