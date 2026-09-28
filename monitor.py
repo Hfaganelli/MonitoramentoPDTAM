@@ -152,7 +152,11 @@ RE_REAIS = re.compile(
     r"R\$\s*" + _VALOR + r"\s*(?:de\s*)?(?:OFF|de desconto|desconto)"
     + r"|cupom\s*(?:de\s*)?(?:desconto\s*(?:de\s*)?)?R\$\s*" + _VALOR
     + r"|economize\s*R\$\s*" + _VALOR, re.I)
-RE_NAO_APLICAVEL = re.compile(r"ganhe|receba|pr[óo]xima compra|indicar|indique|primeira compra no app", re.I)
+RE_NAO_APLICAVEL = re.compile(
+    r"ganhe|receba|pr[óo]xima compra|indicar|indique"
+    # cupons só para novos clientes / primeira compra (não valem para quem já compra na loja)
+    r"|primeir[oa]s?\s+(?:compra|pedido)|\b1[ºªoa]\s*(?:compra|pedido)|novos?\s+clientes?|novos?\s+usu[áa]rios?"
+    r"|clientes?\s+novos?|boas[- ]vindas|first\s+(?:order|purchase)|new\s+customers?", re.I)
 
 
 def analisar_cupom(texto, preco):
@@ -438,15 +442,31 @@ def mercadolivre(url):
 # ------------------------------------------------------------------ Telegram
 
 def telegram(texto):
+    """Envia mensagem. Retorna (ok, detalhe)."""
     if not (TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
-        return
+        return False, "secrets TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID não configurados"
+    token = TELEGRAM_TOKEN.removeprefix("bot").strip().strip('"').strip("'")
     try:
-        http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                  json={"chat_id": TELEGRAM_CHAT_ID, "text": texto,
-                        "parse_mode": "HTML", "disable_web_page_preview": False},
-                  timeout=20)
+        r = http.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                      json={"chat_id": TELEGRAM_CHAT_ID.strip().strip('"'), "text": texto,
+                            "parse_mode": "HTML", "disable_web_page_preview": False},
+                      timeout=20)
+        if r.status_code == 200:
+            return True, "ok"
+        try:
+            desc = r.json().get("description", r.text[:200])
+        except Exception:
+            desc = r.text[:200]
+        dicas = {401: "token inválido: confira TELEGRAM_BOT_TOKEN",
+                 404: "token inválido: confira TELEGRAM_BOT_TOKEN",
+                 400: "chat não encontrado: confira TELEGRAM_CHAT_ID e se você mandou uma mensagem ao bot",
+                 403: "o bot foi bloqueado ou você ainda não iniciou conversa com ele"}
+        msg = f"Telegram recusou (HTTP {r.status_code}): {desc}. {dicas.get(r.status_code, '')}"
+        print("   " + msg)
+        return False, msg
     except Exception as e:
         print(f"   Falha ao enviar Telegram: {e}")
+        return False, str(e)
 
 
 def brl(v):
@@ -497,6 +517,18 @@ def preco_normal(historico, agora, dias=DIAS_NORMAL):
     return round(statistics.median(amostras), 2)
 
 
+def limpar_cupons_invalidos(hist):
+    """Remove do histórico cupons gravados antes do filtro atual (ex.: 'primeira compra')."""
+    for reg in hist.get("produtos", {}).values():
+        c = reg.get("cupom")
+        if c and RE_NAO_APLICAVEL.search(c.get("descricao", "")):
+            for ponto in reg.get("historico", []):
+                if ponto.get("c") == c.get("preco_final"):
+                    ponto.pop("c", None)
+            reg["cupom"] = None
+            reg["alerta_cupom"] = None
+
+
 def _sem_horarios(h):
     h = copy.deepcopy(h)
     h.pop("atualizado_em", None)
@@ -510,6 +542,7 @@ def main():
     produtos = carregar(PRODUCTS_FILE, [])
     hist = carregar(HISTORY_FILE, {"atualizado_em": None, "produtos": {}})
     hist.setdefault("produtos", {})
+    limpar_cupons_invalidos(hist)
     original = copy.deepcopy(hist)
     agora = datetime.now(timezone.utc)
 
@@ -637,11 +670,15 @@ def main():
 
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "--telegram-teste":
-        if not (TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
-            print("Configure os secrets TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID.")
+        print(f"Token configurado: {'sim' if TELEGRAM_TOKEN else 'NÃO'} "
+              f"({len(TELEGRAM_TOKEN)} caracteres) | Chat ID configurado: "
+              f"{'sim' if TELEGRAM_CHAT_ID else 'NÃO'}")
+        ok, detalhe = telegram("✅ Monitor de preços conectado. Os alertas vão chegar aqui.")
+        if ok:
+            print("Mensagem de teste enviada com sucesso.")
+        else:
+            print(f"ERRO: {detalhe}")
             sys.exit(1)
-        telegram("✅ Monitor de preços conectado. Os alertas vão chegar aqui.")
-        print("Mensagem de teste enviada.")
     elif len(sys.argv) >= 3 and sys.argv[1] == "--teste":
         try:
             loja, d = coletar(sys.argv[2])
