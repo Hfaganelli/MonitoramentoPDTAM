@@ -399,10 +399,14 @@ def main():
     hist.setdefault("produtos", {})
 
     ok = falhas = 0
+    vistos = set()
     for i, p in enumerate(produtos):
         if not p.get("url") or p.get("pausado"):
             continue
         pid = id_produto(p)
+        if pid in vistos:  # produto repetido na lista: verifica só uma vez
+            continue
+        vistos.add(pid)
         reg = hist["produtos"].setdefault(pid, {"historico": []})
         print(f"[{i + 1}/{len(produtos)}] {p.get('nome') or p['url'][:70]}")
 
