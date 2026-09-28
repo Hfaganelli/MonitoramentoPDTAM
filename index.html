@@ -280,10 +280,12 @@ async function carregar(){
 async function gh(path, opts={}){
   if (!cfg.token) throw new Error("Configure o token do GitHub para editar pelo painel.");
   const r = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}${path}`, {
+    cache: "no-store",
     ...opts,
     headers: {"Authorization":`Bearer ${cfg.token}`, "Accept":"application/vnd.github+json", ...(opts.headers||{})}
   });
   if (!r.ok && r.status !== 204) {
+    if (r.status === 409) { const e = new Error("conflito"); e.conflito = true; throw e; }
     let msg = `GitHub respondeu ${r.status}`;
     try { msg += ": " + (await r.json()).message; } catch(e){}
     if (r.status === 401) msg = "Token inválido ou expirado. Gere um novo em Configurar.";
@@ -296,12 +298,22 @@ const b64enc = s => btoa(unescape(encodeURIComponent(s)));
 const b64dec = s => decodeURIComponent(escape(atob(s.replace(/\n/g,""))));
 
 async function gravarProdutos(transform, mensagem){
-  const f = await gh(`/contents/products.json?ref=${encodeURIComponent(cfg.branch)}`);
-  const atual = JSON.parse(b64dec(f.content) || "[]");
-  const novo = transform(atual);
-  await gh(`/contents/products.json`, {method:"PUT", body: JSON.stringify({
-    message: mensagem, content: b64enc(JSON.stringify(novo, null, 2) + "\n"), sha: f.sha, branch: cfg.branch
-  })});
+  let novo;
+  for (let tentativa = 0; ; tentativa++) {
+    // lê sempre a versão mais recente (sem cache) para evitar o erro 409
+    const f = await gh(`/contents/products.json?ref=${encodeURIComponent(cfg.branch)}&t=${Date.now()}`);
+    const atual = JSON.parse(b64dec(f.content) || "[]");
+    novo = transform(atual);
+    try {
+      await gh(`/contents/products.json`, {method:"PUT", body: JSON.stringify({
+        message: mensagem, content: b64enc(JSON.stringify(novo, null, 2) + "\n"), sha: f.sha, branch: cfg.branch
+      })});
+      break;
+    } catch (e) {
+      if (!e.conflito || tentativa >= 3) throw e.conflito ? new Error("O GitHub ainda está processando a última alteração. Tente de novo em alguns segundos.") : e;
+      await new Promise(r => setTimeout(r, 1500 * (tentativa + 1)));
+    }
+  }
   produtos = novo; produtos.forEach(x => { if (!x.id) x.id = idDe(x); });
   render();
 }
