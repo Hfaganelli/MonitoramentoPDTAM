@@ -16,6 +16,8 @@ Variáveis de ambiente (todas opcionais):
 "Preço normal" = mediana do preço nos últimos 7 dias (ignora oscilações rápidas).
 """
 import copy
+import hashlib
+import html as htmllib
 import json
 import os
 import statistics
@@ -39,6 +41,7 @@ except ImportError:  # pragma: no cover
 ROOT = Path(__file__).resolve().parent.parent
 PRODUCTS_FILE = ROOT / "products.json"
 HISTORY_FILE = ROOT / "data" / "history.json"
+TELEGRAM_STATE = ROOT / "data" / "telegram.json"
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
@@ -56,6 +59,9 @@ DIAS_NORMAL = 7        # janela do "preço normal"
 MAX_PONTOS = 4000      # pontos de histórico por produto
 PONTO_MIN_INTERVALO = timedelta(hours=1)   # sem mudança, grava 1 ponto por hora
 SALVAR_MIN_INTERVALO = timedelta(minutes=30)  # sem mudança, salva o arquivo a cada 30 min
+FALHAS_ALERTA = 12      # 12 falhas seguidas (~6 h rodando a cada 30 min) = avisa no Telegram
+BRT = timezone(timedelta(hours=-3))  # horário de Brasília
+RESUMO_DIA, RESUMO_HORA = 6, 9      # resumo semanal: domingo (6), a partir das 9h
 
 
 class ErroColeta(Exception):
@@ -68,7 +74,18 @@ def agora_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def get(url, headers=None):
+_SESSAO = None
+
+
+def sessao():
+    """Uma sessão por execução: guarda cookies entre as páginas, como um navegador."""
+    global _SESSAO
+    if _SESSAO is None:
+        _SESSAO = http.Session()
+    return _SESSAO
+
+
+def get(url, headers=None, perfil="chrome"):
     h = {
         "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.7,en;q=0.6",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -80,8 +97,8 @@ def get(url, headers=None):
         h.update(headers)
     opts = {"headers": h, "timeout": 30, "allow_redirects": True}
     if IMPERSONATE:
-        opts["impersonate"] = "chrome"
-    return http.get(url, **opts)
+        opts["impersonate"] = perfil
+    return sessao().get(url, **opts)
 
 
 def numero(valor):
@@ -139,7 +156,7 @@ def id_produto(p):
     m = re.search(r"MLB-?(\d{5,})", url, re.I)
     if m:
         return "ml-MLB" + m.group(1)
-    return "p-" + str(abs(hash(url)) % 10**10)
+    return "p-" + hashlib.md5(url.encode()).hexdigest()[:10]  # estável entre execuções
 
 
 # ---------------------------------------------------------------------- Cupons
@@ -152,13 +169,22 @@ RE_REAIS = re.compile(
     r"R\$\s*" + _VALOR + r"\s*(?:de\s*)?(?:OFF|de desconto|desconto)"
     + r"|cupom\s*(?:de\s*)?(?:desconto\s*(?:de\s*)?)?R\$\s*" + _VALOR
     + r"|economize\s*R\$\s*" + _VALOR, re.I)
-RE_NAO_APLICAVEL = re.compile(r"ganhe|receba|pr[óo]xima compra|indicar|indique|primeira compra no app", re.I)
+RE_NAO_APLICAVEL = re.compile(
+    r"ganhe|receba|pr[óo]xima compra|indicar|indique"
+    # cupons só para novos clientes / primeira compra (não valem para quem já compra na loja)
+    r"|primeir[oa]s?\s+(?:compra|pedido)|\b1[ºªoa]\s*(?:compra|pedido)|novos?\s+clientes?|novos?\s+usu[áa]rios?"
+    r"|clientes?\s+novos?|boas[- ]vindas|first\s+(?:order|purchase)|new\s+customers?", re.I)
 
 
-def analisar_cupom(texto, preco):
+RE_CODIGO = re.compile(r"\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{5,20}\b")
+
+
+def analisar_cupom(texto, preco, checar_restricao=True):
     """Lê um texto de cupom ('Aplicar cupom de 15%', 'R$ 50 OFF com cupom') e calcula o preço final."""
     t = " ".join((texto or "").split())
-    if not preco or not re.search(r"cupo[mn]|coupon", t, re.I) or RE_NAO_APLICAVEL.search(t):
+    if not preco or not re.search(r"cupo[mn]|coupon", t, re.I):
+        return None
+    if checar_restricao and RE_NAO_APLICAVEL.search(t):
         return None
     m = RE_MINIMO.search(t)
     if m and (parse_brl(m.group(1)) or 0) > preco:
@@ -185,18 +211,55 @@ def analisar_cupom(texto, preco):
             "preco_final": round(preco - desconto, 2)}
 
 
+def _contexto(el, niveis=4, limite=900):
+    """Texto dos blocos em volta do elemento (o aviso de restrição costuma ficar ao lado)."""
+    textos, p = [], el
+    for _ in range(niveis):
+        p = p.parent
+        if p is None or p.name in ("body", "html", "[document]"):
+            break
+        t = p.get_text(" ", strip=True)
+        if len(t) > limite:
+            break
+        textos.append(t)
+    return " ".join(textos)
+
+
 def melhor_cupom(soup, preco, seletores):
-    vistos, melhor = set(), None
+    """Retorna (melhor cupom válido, lista de preços finais de cupons recusados)."""
+    # códigos de cupons restritos (primeira compra etc.) mencionados em qualquer lugar da página
+    restritos = set()
+    for trecho in soup.find_all(string=RE_NAO_APLICAVEL):
+        el = trecho.parent
+        for _ in range(4):
+            if el is None:
+                break
+            t = el.get_text(" ", strip=True)
+            if len(t) > 900:
+                break
+            if re.search(r"cupo[mn]|coupon", t, re.I):
+                restritos.update(RE_CODIGO.findall(t))
+                break
+            el = el.parent
+
+    vistos, melhor, recusados = set(), None, set()
     for sel in seletores:
         for el in soup.select(sel):
             txt = el.get_text(" ", strip=True)
             if not txt or len(txt) > 400 or txt in vistos:
                 continue
             vistos.add(txt)
-            c = analisar_cupom(txt, preco)
-            if c and (melhor is None or c["desconto"] > melhor["desconto"]):
-                melhor = c
-    return melhor
+            bruto = analisar_cupom(txt, preco, checar_restricao=False)
+            if not bruto:
+                continue
+            restrito = (RE_NAO_APLICAVEL.search(txt + " " + _contexto(el))
+                        or any(cod in txt for cod in restritos))
+            if restrito:
+                recusados.add(bruto["preco_final"])
+                continue
+            if melhor is None or bruto["desconto"] > melhor["desconto"]:
+                melhor = bruto
+    return melhor, sorted(recusados)
 
 
 CUPOM_AMAZON = ['[id*="oupon"]', '[class*="oupon"]', "#promoPriceBlockMessage_feature_div",
@@ -206,6 +269,9 @@ CUPOM_ML = ['[class*="coupon"]', '[class*="cupom"]', '[id*="coupon"]', ".ui-pdp-
 
 
 # ---------------------------------------------------------------------- Amazon
+
+_AQUECIDOS = set()
+
 
 def eh_captcha_amazon(html):
     return ("validateCaptcha" in html or "api-services-support@amazon.com" in html
@@ -220,18 +286,43 @@ def amazon(url):
 
     m = re.search(r"/(?:dp|gp/product|gp/aw/d|product)/([A-Z0-9]{10})", url)
     host = urlparse(url).hostname or "www.amazon.com.br"
-    url_limpa = f"https://{host}/dp/{m.group(1)}" if m else url
+    if "amazon." not in host:
+        host = "www.amazon.com.br"
 
-    html, status = "", None
-    for tentativa in range(3):
-        r = get(url_limpa)
-        html, status = r.text, r.status_code
-        if status == 200 and not eh_captcha_amazon(html):
-            break
-        time.sleep(6 + random.random() * 8)
+    # 1ª visita da rodada: abre a home para receber os cookies de sessão, como um navegador
+    if host not in _AQUECIDOS:
+        _AQUECIDOS.add(host)
+        try:
+            get(f"https://{host}/")
+            time.sleep(1.5 + random.random() * 2)
+        except Exception:
+            pass
+
+    if m:
+        asin = m.group(1)
+        tentativas = [(f"https://{host}/dp/{asin}", "chrome"),
+                      (f"https://{host}/gp/product/{asin}?psc=1", "edge"),
+                      (f"https://{host}/gp/aw/d/{asin}", "safari_ios")]  # página mobile, mais leve
     else:
-        raise ErroColeta(f"Amazon bloqueou a leitura (HTTP {status} / captcha). "
-                         "Tenta de novo na próxima rodada.")
+        tentativas = [(url, "chrome"), (url, "edge"), (url, "safari_ios")]
+
+    html, motivos = None, []
+    for u, perfil in tentativas:
+        try:
+            r = get(u, perfil=perfil)
+        except Exception as e:
+            motivos.append(f"conexão ({type(e).__name__})")
+            continue
+        if r.status_code == 404:
+            raise ErroColeta("Produto não encontrado na Amazon (404). O link pode ter mudado.")
+        if r.status_code == 200 and not eh_captcha_amazon(r.text):
+            html = r.text
+            break
+        motivos.append("captcha" if r.status_code == 200 else f"HTTP {r.status_code}")
+        time.sleep(4 + random.random() * 5)
+    if html is None:
+        raise ErroColeta("Amazon bloqueou a leitura (" + ", ".join(motivos) + "). "
+                         "Nova tentativa na próxima rodada.")
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -261,6 +352,10 @@ def amazon(url):
         "#price_inside_buybox",
         "#kindle-price",
         "#tp_price_block_total_price_ww .a-offscreen",
+        "#apex_offerDisplay_desktop .a-price .a-offscreen",
+        "#buybox .a-price .a-offscreen",
+        '.a-price[data-a-color="price"] .a-offscreen',
+        "#corePrice_mobile_feature_div .a-offscreen",
     ]
     for sel in seletores:
         el = soup.select_one(sel)
@@ -294,8 +389,9 @@ def amazon(url):
             raise ErroColeta("Página da Amazon veio sem produto (possível bloqueio).")
         raise ErroColeta("Preço não encontrado na página da Amazon.")
 
-    cupom = melhor_cupom(soup, preco, CUPOM_AMAZON) if preco else None
+    cupom, recusados = melhor_cupom(soup, preco, CUPOM_AMAZON) if preco else (None, [])
     return {"titulo": titulo, "imagem": imagem, "preco": preco, "cupom": cupom,
+            "cupons_recusados": recusados,
             "disponivel": bool(preco) and not indisponivel}
 
 
@@ -430,22 +526,30 @@ def mercadolivre(url):
     if not preco and disponivel:
         raise ErroColeta("Preço não encontrado na página do Mercado Livre.")
 
-    cupom = melhor_cupom(soup, preco, CUPOM_ML) if preco else None
+    cupom, recusados = melhor_cupom(soup, preco, CUPOM_ML) if preco else (None, [])
     return {"titulo": titulo, "imagem": imagem, "preco": preco, "cupom": cupom,
+            "cupons_recusados": recusados,
             "disponivel": disponivel and bool(preco)}
 
 
 # ------------------------------------------------------------------ Telegram
 
+def _tg_token():
+    return TELEGRAM_TOKEN.removeprefix("bot").strip().strip('"').strip("'")
+
+
+def _tg_chat():
+    return TELEGRAM_CHAT_ID.strip().strip('"')
+
+
 def telegram(texto):
     """Envia mensagem. Retorna (ok, detalhe)."""
     if not (TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
         return False, "secrets TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID não configurados"
-    token = TELEGRAM_TOKEN.removeprefix("bot").strip().strip('"').strip("'")
     try:
-        r = http.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                      json={"chat_id": TELEGRAM_CHAT_ID.strip().strip('"'), "text": texto,
-                            "parse_mode": "HTML", "disable_web_page_preview": False},
+        r = http.post(f"https://api.telegram.org/bot{_tg_token()}/sendMessage",
+                      json={"chat_id": _tg_chat(), "text": texto[:4000],
+                            "parse_mode": "HTML", "disable_web_page_preview": True},
                       timeout=20)
         if r.status_code == 200:
             return True, "ok"
@@ -463,6 +567,184 @@ def telegram(texto):
     except Exception as e:
         print(f"   Falha ao enviar Telegram: {e}")
         return False, str(e)
+
+
+def esc(t):
+    return htmllib.escape(str(t or ""), quote=False)
+
+
+AJUDA = """<b>Monitor de preços</b>
+
+<b>Adicionar:</b> mande o link do produto (Amazon ou Mercado Livre). Pode compartilhar direto do app da loja.
+Com preço-alvo: <code>/add LINK 45</code> ou escreva <code>alvo 45</code> junto com o link.
+Com grupo: inclua <code>#Livros</code> na mensagem.
+
+<b>Comandos</b>
+/lista  mostra seus produtos numerados
+/alvo 2 45  muda o alvo do produto 2 (use 0 para tirar)
+/grupo 2 Livros  muda o grupo do produto 2
+/remover 2  remove o produto 2
+/ajuda  mostra esta mensagem
+
+Os comandos são lidos na próxima rodada do robô (até 30 minutos)."""
+
+RE_URL = re.compile(r"https?://[^\s<>\"]+")
+RE_NUM = re.compile(r"(?<![\w/.,])(\d+(?:[.,]\d{1,2})?)(?![\w/])")
+
+
+def extrair_link(texto):
+    for u in RE_URL.findall(texto or ""):
+        u = u.rstrip(").,;!?'\"")
+        if detectar_loja(u):
+            return u
+    return None
+
+
+def normalizar_link(url):
+    """Resolve links curtos (amzn.to, a.co, mercadolivre.com/sec, meli.la) e limpa o endereço."""
+    host = (urlparse(url).hostname or "").lower()
+    curto = host in ("amzn.to", "a.co", "amzn.eu") or host.endswith("meli.la") or "/sec/" in url
+    if curto:
+        try:
+            url = get(url).url or url
+        except Exception:
+            pass
+    m = re.search(r"/(?:dp|gp/product|gp/aw/d|product)/([A-Z0-9]{10})", url)
+    if detectar_loja(url) == "amazon" and m:
+        h = urlparse(url).hostname or "www.amazon.com.br"
+        return f"https://{h if 'amazon.' in h else 'www.amazon.com.br'}/dp/{m.group(1)}"
+    return url.split("#")[0]
+
+
+def _nome(p, hist):
+    reg = hist.get("produtos", {}).get(id_produto(p), {})
+    return p.get("nome") or reg.get("nome") or reg.get("titulo_loja") or p["url"][:60]
+
+
+def texto_lista(produtos, hist):
+    if not produtos:
+        return "Sua lista está vazia. Mande o link de um produto para começar."
+    linhas = ["📋 <b>Seus produtos</b>"]
+    for n, p in enumerate(produtos, 1):
+        reg = hist.get("produtos", {}).get(id_produto(p), {})
+        partes = [f"{n}. {esc(_nome(p, hist)[:60])}"]
+        if reg.get("atual"):
+            partes.append(brl(reg["atual"]))
+        if p.get("preco_alvo"):
+            partes.append(f"alvo {brl(float(p['preco_alvo']))}")
+        if p.get("grupo"):
+            partes.append("#" + esc(p["grupo"]))
+        linhas.append(" · ".join(partes))
+    linhas.append("\n/alvo N valor · /grupo N nome · /remover N")
+    return "\n".join(linhas)
+
+
+def comando(texto, produtos, hist):
+    """Interpreta uma mensagem. Retorna (resposta, lista_mudou, id_novo)."""
+    t = (texto or "").strip()
+    low = t.lower()
+    cmd = low.split()[0].split("@")[0] if low.startswith("/") else ""
+
+    if cmd in ("/start", "/ajuda", "/help"):
+        return AJUDA, False, None
+    if cmd == "/lista":
+        return texto_lista(produtos, hist), False, None
+
+    if cmd in ("/remover", "/alvo", "/grupo"):
+        partes = t.split(maxsplit=2)
+        if len(partes) < 2 or not partes[1].isdigit() or not 1 <= int(partes[1]) <= len(produtos):
+            return f"Use {cmd} N (o número vem de /lista).", False, None
+        p = produtos[int(partes[1]) - 1]
+        nome = esc(_nome(p, hist)[:60])
+        if cmd == "/remover":
+            produtos.remove(p)
+            return f"🗑️ Removido: {nome}", True, None
+        if cmd == "/alvo":
+            v = parse_brl(partes[2]) if len(partes) > 2 else None
+            if v:
+                p["preco_alvo"] = v
+                return f"🎯 Alvo de {nome}: {brl(v)}", True, None
+            p.pop("preco_alvo", None)
+            return f"Alvo removido de {nome}.", True, None
+        g = partes[2].strip().lstrip("#") if len(partes) > 2 else ""
+        if g and g != "0":
+            p["grupo"] = g[:1].upper() + g[1:40]
+            return f"🗂️ {nome} agora está em {esc(p['grupo'])}.", True, None
+        p.pop("grupo", None)
+        return f"Grupo removido de {nome}.", True, None
+
+    link = extrair_link(t)
+    if not link:
+        return "Não entendi. Mande o link de um produto da Amazon ou do Mercado Livre, ou /ajuda.", False, None
+
+    alvo = None
+    resto = t.replace(link, " ")
+    if cmd == "/add":
+        nums = RE_NUM.findall(resto[4:])
+        alvo = parse_brl(nums[0]) if nums else None
+    else:
+        m = re.search(r"\balvo\D{0,6}(\d+(?:[.,]\d{1,2})?)", resto, re.I)
+        alvo = parse_brl(m.group(1)) if m else None
+    tags = re.findall(r"#([0-9A-Za-zÀ-ÿ_-]+)", resto)
+    grupo = (tags[0][:1].upper() + tags[0][1:40]) if tags else None
+
+    url = normalizar_link(link)
+    novo = {"url": url, "adicionado_em": agora_iso()}
+    novo["id"] = id_produto(novo)
+    existente = next((x for x in produtos if id_produto(x) == novo["id"]), None)
+    if existente:
+        extras = []
+        if alvo:
+            existente["preco_alvo"] = alvo
+            extras.append(f"alvo {brl(alvo)}")
+        if grupo:
+            existente["grupo"] = grupo
+            extras.append(f"grupo {esc(grupo)}")
+        msg = f"Esse produto já está na lista: {esc(_nome(existente, hist)[:60])}."
+        if extras:
+            msg += " Atualizei " + " e ".join(extras) + "."
+        return msg, bool(extras), None
+    if alvo:
+        novo["preco_alvo"] = alvo
+    if grupo:
+        novo["grupo"] = grupo
+    produtos.append(novo)
+    return None, True, novo["id"]  # a confirmação sai depois da primeira leitura
+
+
+def processar_telegram(produtos, hist, estado):
+    """Lê as mensagens novas enviadas ao bot. Retorna (lista_mudou, ids_novos)."""
+    if not (TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
+        return False, []
+    try:
+        r = http.post(f"https://api.telegram.org/bot{_tg_token()}/getUpdates",
+                      json={"offset": estado.get("offset", 0), "timeout": 0,
+                            "allowed_updates": ["message"]}, timeout=30)
+        res = r.json()
+    except Exception as e:
+        print(f"Telegram: não consegui ler mensagens ({e})")
+        return False, []
+    if not res.get("ok"):
+        print(f"Telegram: {res.get('description')}")
+        return False, []
+
+    mudou, novos = False, []
+    for up in res.get("result", []):
+        estado["offset"] = up["update_id"] + 1
+        msg = up.get("message") or {}
+        if str((msg.get("chat") or {}).get("id")) != _tg_chat():
+            continue  # só obedece a você
+        texto = msg.get("text") or msg.get("caption") or ""
+        if not texto.strip():
+            continue
+        print(f"Telegram: comando recebido: {texto[:60]!r}")
+        resposta, m, novo = comando(texto, produtos, hist)
+        mudou = mudou or m
+        if novo:
+            novos.append(novo)
+        if resposta:
+            telegram(resposta)
+    return mudou, novos
 
 
 def brl(v):
@@ -513,6 +795,74 @@ def preco_normal(historico, agora, dias=DIAS_NORMAL):
     return round(statistics.median(amostras), 2)
 
 
+def limpar_cupons_invalidos(hist):
+    """Remove do histórico cupons gravados antes do filtro atual (ex.: 'primeira compra')."""
+    for reg in hist.get("produtos", {}).values():
+        c = reg.get("cupom")
+        if c and RE_NAO_APLICAVEL.search(c.get("descricao", "")):
+            for ponto in reg.get("historico", []):
+                if ponto.get("c") == c.get("preco_final"):
+                    ponto.pop("c", None)
+            reg["cupom"] = None
+            reg["alerta_cupom"] = None
+
+
+def preco_em(historico, t):
+    """Preço vigente no instante t (último ponto até t)."""
+    val = None
+    for x in historico:
+        dt = _dt(x.get("t", ""))
+        if dt and dt <= t:
+            val = x.get("p")
+        elif dt and dt > t:
+            break
+    return val if val is not None else (historico[0]["p"] if historico else None)
+
+
+def texto_resumo(produtos, hist, agora):
+    caiu, subiu, melhor, cupom, parado, igual = [], [], [], [], [], 0
+    vistos = set()
+    for p in produtos:
+        pid = id_produto(p)
+        if pid in vistos:
+            continue
+        vistos.add(pid)
+        reg = hist.get("produtos", {}).get(pid, {})
+        nome = esc(_nome(p, hist)[:50])
+        h = reg.get("historico") or []
+        atual = reg.get("atual")
+        if (reg.get("falhas_seguidas") or 0) >= FALHAS_ALERTA or not atual:
+            parado.append(f"• {nome}")
+            continue
+        antes = preco_em(h, agora - timedelta(days=7))
+        if antes and atual < antes * 0.995:
+            caiu.append((atual / antes - 1, f"• {nome}: {brl(antes)} → <b>{brl(atual)}</b> ({(atual/antes-1)*100:.0f}%)"))
+        elif antes and atual > antes * 1.005:
+            subiu.append((atual / antes - 1, f"• {nome}: {brl(antes)} → {brl(atual)} (+{(atual/antes-1)*100:.0f}%)"))
+        else:
+            igual += 1
+        if len(h) > 3 and atual <= min(x["p"] for x in h) < max(x["p"] for x in h):
+            melhor.append(f"• {nome}: {brl(atual)}")
+        if reg.get("cupom"):
+            cupom.append(f"• {nome}: {brl(reg['cupom']['preco_final'])} com cupom")
+    partes = [f"📊 <b>Resumo da semana</b> ({agora.astimezone(BRT):%d/%m})"]
+    if caiu:
+        partes.append("\n⬇️ <b>Caíram</b>\n" + "\n".join(x for _, x in sorted(caiu)))
+    if subiu:
+        partes.append("\n⬆️ <b>Subiram</b>\n" + "\n".join(x for _, x in sorted(subiu, reverse=True)))
+    if melhor:
+        partes.append("\n🏆 <b>No menor preço já visto</b>\n" + "\n".join(melhor))
+    if cupom:
+        partes.append("\n🎟️ <b>Com cupom agora</b>\n" + "\n".join(cupom))
+    if parado:
+        partes.append("\n⚠️ <b>Sem leitura</b>\n" + "\n".join(parado))
+    if igual:
+        partes.append(f"\n{igual} produto(s) sem mudança na semana.")
+    if len(partes) == 1:
+        partes.append("\nNenhum produto na lista ainda.")
+    return "\n".join(partes)
+
+
 def _sem_horarios(h):
     h = copy.deepcopy(h)
     h.pop("atualizado_em", None)
@@ -522,12 +872,22 @@ def _sem_horarios(h):
     return h
 
 
-def main():
+def main(forcar_resumo=False):
     produtos = carregar(PRODUCTS_FILE, [])
     hist = carregar(HISTORY_FILE, {"atualizado_em": None, "produtos": {}})
     hist.setdefault("produtos", {})
+    limpar_cupons_invalidos(hist)
     original = copy.deepcopy(hist)
     agora = datetime.now(timezone.utc)
+    estado = carregar(TELEGRAM_STATE, {"offset": 0})
+    estado_original = copy.deepcopy(estado)
+
+    # 1) comandos enviados ao bot (adicionar, remover, alvo, grupo)
+    lista_mudou, novos = processar_telegram(produtos, hist, estado)
+    if lista_mudou:
+        PRODUCTS_FILE.write_text(json.dumps(produtos, ensure_ascii=False, indent=2) + "\n",
+                                 encoding="utf-8")
+        print("Lista de produtos atualizada pelo Telegram.")
 
     ok = falhas = 0
     vistos = set()
@@ -545,15 +905,33 @@ def main():
             loja, dados = coletar(p["url"])
         except Exception as e:
             falhas += 1
-            reg.update({"url": p["url"], "erro": str(e), "ultima_falha": agora_iso()})
+            reg.update({"url": p["url"], "erro": str(e), "ultima_falha": agora_iso(),
+                        "falhas_seguidas": reg.get("falhas_seguidas", 0) + 1})
             print(f"   ✗ {e}")
+            if reg["falhas_seguidas"] >= FALHAS_ALERTA and not reg.get("alerta_parado"):
+                horas = reg["falhas_seguidas"] // 2
+                telegram(f"⚠️ <b>Não consigo ler o preço</b> de {esc(_nome(p, hist)[:60])} "
+                         f"há cerca de {horas} horas.\nMotivo: {esc(str(e)[:150])}\n"
+                         "Continuo tentando e aviso quando voltar.\n\n" + p["url"])
+                reg["alerta_parado"] = True
             time.sleep(2 + random.random() * 3)
             continue
 
         ok += 1
+        if reg.get("alerta_parado"):
+            reg["alerta_parado"] = False
+            telegram(f"✅ Voltei a ler {esc(_nome(p, hist)[:60])}"
+                     + (f": {brl(dados['preco'])}" if dados.get("preco") else "."))
         preco = dados.get("preco")
         cupom = dados.get("cupom")
         alvo = numero(p.get("preco_alvo"))
+        # cupons que a página marca como restritos: some com eles do histórico também
+        recusados = set(dados.get("cupons_recusados") or [])
+        if recusados:
+            for ponto in reg.get("historico", []):
+                if ponto.get("c") in recusados:
+                    ponto.pop("c", None)
+            reg["alerta_cupom"] = None
         normal = preco_normal(reg.get("historico", []), agora)  # calculado ANTES da leitura nova
 
         reg.update({
@@ -566,6 +944,7 @@ def main():
             "disponivel": dados.get("disponivel", True),
             "ultima_verificacao": agora_iso(),
             "erro": None,
+            "falhas_seguidas": 0,
             "cupom": cupom,
             "preco_normal": normal,
         })
@@ -637,6 +1016,34 @@ def main():
 
         time.sleep(2 + random.random() * 4)  # educado com as lojas
 
+    # 2) confirma no Telegram os produtos adicionados por lá, já com o primeiro preço
+    for pid in novos:
+        reg = hist["produtos"].get(pid, {})
+        p = next((x for x in produtos if id_produto(x) == pid), {"url": ""})
+        nome = esc((reg.get("nome") or p.get("url", ""))[:70])
+        if reg.get("atual"):
+            extra = f"\nPreço agora: <b>{brl(reg['atual'])}</b>"
+            if reg.get("cupom"):
+                extra += f" ({brl(reg['cupom']['preco_final'])} com cupom)"
+        else:
+            extra = "\nAinda não consegui ler o preço; tento de novo na próxima rodada."
+        if p.get("preco_alvo"):
+            extra += f"\nAlvo: {brl(float(p['preco_alvo']))}"
+        telegram(f"✅ <b>Adicionado:</b> {nome}{extra}")
+
+    # 3) resumo semanal (domingo de manhã, horário de Brasília)
+    local = agora.astimezone(BRT)
+    hoje = local.date().isoformat()
+    if forcar_resumo or (local.weekday() == RESUMO_DIA and local.hour >= RESUMO_HORA
+                         and estado.get("ultimo_resumo") != hoje):
+        ok_envio, _ = telegram(texto_resumo(produtos, hist, agora))
+        if ok_envio and not forcar_resumo:
+            estado["ultimo_resumo"] = hoje
+
+    if estado != estado_original:
+        TELEGRAM_STATE.parent.mkdir(parents=True, exist_ok=True)
+        TELEGRAM_STATE.write_text(json.dumps(estado), encoding="utf-8")
+
     # só salva se algo mudou de verdade, ou a cada 30 min (evita commits a cada 10 min à toa)
     ultimo_save = _dt(original.get("atualizado_em") or "")
     mudou = _sem_horarios(hist) != _sem_horarios(original)
@@ -670,4 +1077,4 @@ if __name__ == "__main__":
             print(f"Erro: {e}")
             sys.exit(1)
     else:
-        main()
+        main(forcar_resumo="--com-resumo" in sys.argv)
