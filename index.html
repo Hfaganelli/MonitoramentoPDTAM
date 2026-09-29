@@ -12,7 +12,7 @@
 :root{
   --paper:#F1F4F8; --surface:#FFFFFF; --ink:#16202C; --muted:#5A6676; --line:#D8DEE6;
   --tag:#FFD23F; --tag-ink:#231A00; --down:#0E8157; --up:#C23B17; --focus:#2F6FEB;
-  --coupon:#7B3FE4;
+  --coupon:#7B3FE4; --on-down:#FFFFFF;
   --font:"Archivo", "Helvetica Neue", Arial, system-ui, sans-serif;
   box-sizing:border-box;
   padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
@@ -21,13 +21,13 @@
   :root:not([data-theme="light"]){
     --paper:#10151C; --surface:#18202A; --ink:#E8EDF3; --muted:#9AA6B5; --line:#2A3544;
     --tag:#F5C518; --tag-ink:#1E1600; --down:#3CC48E; --up:#FF7A55; --focus:#7AA7FF;
-    --coupon:#B99CFF;
+    --coupon:#B99CFF; --on-down:#05261A;
   }
 }
 :root[data-theme="dark"]{
   --paper:#10151C; --surface:#18202A; --ink:#E8EDF3; --muted:#9AA6B5; --line:#2A3544;
   --tag:#F5C518; --tag-ink:#1E1600; --down:#3CC48E; --up:#FF7A55; --focus:#7AA7FF;
-  --coupon:#B99CFF;
+  --coupon:#B99CFF; --on-down:#05261A;
 }
 *,*::before,*::after{box-sizing:inherit}
 html{scroll-padding-top:env(safe-area-inset-top,0px)}
@@ -54,7 +54,33 @@ h1{font-size:clamp(2.2rem,6vw,3.4rem);line-height:1;margin:0;font-weight:800;
 .btn.ghost:hover{background:transparent;color:var(--ink);text-decoration:underline}
 .btn[disabled]{opacity:.5;cursor:progress}
 
-.filters{display:flex;gap:6px;margin:0 0 14px;flex-wrap:wrap}
+.toolbar{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;justify-content:space-between;margin:0 0 14px}
+.filters{display:flex;gap:6px;flex-wrap:wrap}
+.chip.g{border-style:dashed}
+.sort{display:flex;align-items:center;gap:8px;font-size:.85rem;color:var(--muted);font-weight:600;margin:0}
+select{font:inherit;color:var(--ink);background:var(--surface);border:1.5px solid var(--line);border-radius:10px;padding:7px 10px}
+dialog select{width:100%;background:var(--paper)}
+.sec{font-size:1rem;font-stretch:85%;margin:14px 0 -4px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.sec span{font-weight:500;margin-left:4px}
+.grp{background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:0 7px;font-weight:600;color:var(--ink)}
+.termo{border-radius:999px;padding:0 9px;font-weight:700;font-size:.78rem;line-height:1.7}
+.t-otimo{background:var(--down);color:var(--on-down)}
+.t-bom{background:color-mix(in srgb,var(--down) 18%,transparent);color:var(--down)}
+.t-normal{background:var(--paper);color:var(--muted);border:1px solid var(--line)}
+.t-caro{background:color-mix(in srgb,var(--up) 16%,transparent);color:var(--up)}
+.t-dados{color:var(--muted);font-weight:500;font-style:italic;padding:0}
+.offers{display:flex;flex-direction:column;gap:4px;margin:8px 0 2px;max-width:560px}
+.offer{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;font-size:.88rem;padding:5px 10px;border-radius:8px;background:var(--paper)}
+.offer.best{outline:1.5px solid var(--down)}
+.offer b{font-variant-numeric:tabular-nums}
+.offer .pill{background:var(--down);color:var(--on-down);border-radius:999px;padding:0 8px;font-size:.74rem;font-weight:700}
+.offer-actions{margin-left:auto;display:flex;gap:10px;font-size:.8rem}
+.offer-actions a,.linkbtn{color:var(--muted);background:none;border:0;padding:0;cursor:pointer;font:inherit;text-decoration:underline}
+.offer-actions a:hover,.linkbtn:hover{color:var(--ink)}
+.tag .where{display:block;font-size:.74rem;font-weight:600;opacity:.8;margin-top:2px}
+.offer-detail+.offer-detail{margin-top:18px;padding-top:14px;border-top:1px dashed var(--line)}
+.offer-detail h4{margin:0 0 6px;font-size:.95rem}
+a.btn{text-decoration:none;display:inline-flex;align-items:center}
 .chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;
   padding:5px 12px;font-size:.85rem;cursor:pointer;color:var(--muted)}
 .chip[aria-pressed="true"]{border-color:var(--ink);color:var(--ink);font-weight:600}
@@ -95,7 +121,7 @@ h1{font-size:clamp(2.2rem,6vw,3.4rem);line-height:1;margin:0;font-weight:800;
   font-variant-numeric:tabular-nums;letter-spacing:-.01em}
 .tag .cents{font-size:1.05rem;font-weight:800;vertical-align:top;margin-left:1px}
 .tag .target{display:block;font-size:.8rem;margin-top:6px;font-weight:600;opacity:.85}
-.tag.hit{background:var(--down);color:#fff}
+.tag.hit{background:var(--down);color:var(--on-down)}
 .tag.hit .target{opacity:1}
 .tag.off{background:var(--line);color:var(--muted)}
 .tag.off .price{font-size:1.25rem;font-stretch:90%}
@@ -157,11 +183,17 @@ input:focus{border-color:var(--focus);outline:none}
     </div>
   </header>
 
-  <div class="filters" role="group" aria-label="Filtrar produtos">
-    <button class="chip" data-f="todos" aria-pressed="true" type="button">Todos</button>
-    <button class="chip" data-f="alvo" aria-pressed="false" type="button">No preço-alvo</button>
-    <button class="chip" data-f="amazon" aria-pressed="false" type="button">Amazon</button>
-    <button class="chip" data-f="mercadolivre" aria-pressed="false" type="button">Mercado Livre</button>
+  <div class="toolbar">
+    <div class="filters" id="chips" role="group" aria-label="Filtrar produtos"></div>
+    <label class="sort">Ordenar
+      <select id="ordem">
+        <option value="momento">Bom momento primeiro</option>
+        <option value="desconto">Maior desconto</option>
+        <option value="preco">Menor preço</option>
+        <option value="recentes">Mais recentes</option>
+        <option value="nome">Nome (A–Z)</option>
+      </select>
+    </label>
   </div>
 
   <main class="list" id="list"></main>
@@ -170,19 +202,33 @@ input:focus{border-color:var(--focus);outline:none}
 <dialog id="dlgProd">
   <form class="dlg" method="dialog" id="formProd">
     <h2 id="prodTitle">Adicionar produto</h2>
-    <p class="hint">Cole o link do produto na Amazon ou no Mercado Livre.</p>
-    <label for="fUrl">Link do produto</label>
-    <input id="fUrl" type="url" required placeholder="https://www.amazon.com.br/dp/…">
+    <p class="hint" id="hintProd">Cole o link do produto na Amazon ou no Mercado Livre.</p>
+    <div id="wrapUrl">
+      <label for="fUrl">Link do produto</label>
+      <input id="fUrl" type="url" placeholder="https://www.amazon.com.br/dp/…">
+    </div>
+    <div id="wrapComparar">
+      <label for="fComparar">É o mesmo produto de outra loja?</label>
+      <select id="fComparar"></select>
+      <p class="small">Escolha para comparar Amazon e Mercado Livre no mesmo cartão.</p>
+    </div>
+    <div id="wrapOutro" hidden>
+      <label for="fOutro">Adicionar link de outra loja</label>
+      <input id="fOutro" type="url" placeholder="Opcional: o mesmo produto no Mercado Livre ou na Amazon">
+    </div>
     <div class="grid2">
       <div>
         <label for="fAlvo">Preço-alvo (R$)</label>
         <input id="fAlvo" type="number" step="0.01" min="0" placeholder="Opcional">
       </div>
       <div>
-        <label for="fNome">Apelido</label>
-        <input id="fNome" type="text" placeholder="Opcional">
+        <label for="fGrupo">Grupo</label>
+        <input id="fGrupo" type="text" list="listaGrupos" placeholder="Ex.: Livros">
+        <datalist id="listaGrupos"></datalist>
       </div>
     </div>
+    <label for="fNome">Apelido</label>
+    <input id="fNome" type="text" placeholder="Opcional">
     <p class="small">Você recebe aviso no Telegram quando o preço cair 10% abaixo do normal, quando um cupom derrubar 20% ou quando chegar ao alvo.</p>
     <div class="dlg-actions">
       <button class="btn ghost" value="cancel" type="button" data-close>Cancelar</button>
@@ -221,6 +267,7 @@ input:focus{border-color:var(--focus);outline:none}
 const $ = s => document.querySelector(s);
 const CFG_KEY = "mp-config", THEME_KEY = "mp-theme";
 let produtos = [], hist = {produtos:{}}, filtro = "todos", aberto = null, editando = null;
+try { filtro = localStorage.getItem("mp-filtro") || filtro; } catch(e){}
 
 /* ---------- configuração ---------- */
 function lerCfg(){
@@ -406,91 +453,205 @@ function grafico(pontos, alvo, w, h, grande){
     <text x="${w-padR}" y="${h-8}" font-size="11" fill="var(--muted)" text-anchor="end">${new Date(t1).toLocaleDateString("pt-BR")}</text>
     <text x="${w-padR}" y="${f(Y(pl) - 9)}" font-size="11" font-weight="650" fill="${cor}" text-anchor="end">${brl(pl)}</text>
     ${alvo ? `<text x="${pad}" y="${Y(alvo)-5}" font-size="11" fill="var(--down)">alvo ${brl(alvo)}</text>` : ""}` : "";
-  return `<svg class="${grande?"bigchart":"spark"}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"
+  return `<svg class="${grande?"bigchart":"spark"}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"${grande ? ` style="height:${h}px"` : ""}
     aria-label="Histórico: de ${brl(ps[0])} para ${brl(pl)}${cs[cs.length-1]!=null?", com cupom "+brl(cs[cs.length-1]):""}" data-pts='${esc(JSON.stringify(pontos))}' data-pad="${pad}" data-padr="${padR}" data-w="${w}">
     <path d="${area}" fill="${cor}" opacity=".10"/>${alvoL}
     <path d="${d}" fill="none" stroke="${cor}" stroke-width="${grande?2:1.6}" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
     ${linhaCupom}${last}${rotulos}${eixos}</svg>`;
 }
 
-function etiqueta(r, alvo){
+/* ---------- montagem dos itens (mesmo produto em várias lojas = 1 cartão) ---------- */
+const chaveDe = p => p.item || p.id;
+const asinDe = p => (p.id && p.id.startsWith("amz-") ? p.id.slice(4) : (p.url.match(/\/(?:dp|gp\/product|gp\/aw\/d)\/([A-Z0-9]{10})/) || [])[1]);
+const efetivoDe = r => r?.atual != null ? Math.min(r.atual, r.cupom?.preco_final ?? Infinity) : null;
+
+function amostras(h){
+  if (!h || h.length < 2) return [];
+  const out = []; let i = 0, cur = h[0];
+  for (let t = +new Date(h[0].t), fim = Date.now(); t <= fim; t += 3600e3) {
+    while (i < h.length && +new Date(h[i].t) <= t) { cur = h[i]; i++; }
+    out.push(cur.c != null ? Math.min(cur.p, cur.c) : cur.p);
+  }
+  return out;
+}
+function termometro(o){
+  const t = termometroBase(o);
+  if (t && t.nivel <= 2 && o.r?.cupom && o.efetivo < o.r.atual) t.txt += " c/ cupom";
+  return t;
+}
+function termometroBase(o){
+  const r = o?.r; if (!r || o.efetivo == null) return null;
+  const h = r.historico || []; if (!h.length) return null;
+  const dias = (Date.now() - new Date(h[0].t)) / 864e5;
+  if (dias < 3) return {nivel:5, cls:"t-dados", txt:`Coletando dados (${Math.floor(dias)} de 3 dias)`};
+  const a = amostras(h); if (!a.length) return null;
+  const ord = [...a].sort((x, y) => x - y), med = ord[Math.floor(ord.length / 2)], min = ord[0], v = o.efetivo;
+  const pct = a.filter(x => x < v - .005).length / a.length;
+  if (v <= min + .005 && v < med * .98) return {nivel:0, cls:"t-otimo", txt:"Menor preço já visto"};
+  if (pct <= .10 && v < med * .98) return {nivel:1, cls:"t-otimo", txt:"Ótimo preço"};
+  if (pct <= .30 && v < med * .99) return {nivel:2, cls:"t-bom", txt:"Bom preço"};
+  if (pct >= .80 && v > med * 1.02) return {nivel:4, cls:"t-caro", txt:"Caro agora"};
+  return {nivel:3, cls:"t-normal", txt:"Preço normal"};
+}
+
+function montarItens(){
+  const mapa = new Map();
+  produtos.forEach((p, idx) => {
+    const k = chaveDe(p);
+    if (!mapa.has(k)) mapa.set(k, {key:k, ofertas:[], idx});
+    const r = hist.produtos[p.id] || null;
+    mapa.get(k).ofertas.push({p, r, loja: loja(p.url), efetivo: efetivoDe(r)});
+  });
+  return [...mapa.values()].map(it => {
+    const comPreco = it.ofertas.filter(o => o.efetivo != null).sort((a, b) => a.efetivo - b.efetivo);
+    it.melhor = comPreco[0] || it.ofertas[0];
+    it.nome = it.ofertas.map(o => o.p.nome).find(Boolean) || it.ofertas.map(o => o.r?.nome || o.r?.titulo_loja).find(Boolean) || "Produto sem nome";
+    it.grupo = it.ofertas.map(o => o.p.grupo).find(Boolean) || "";
+    it.alvo = Number(it.ofertas.map(o => o.p.preco_alvo).find(v => v)) || null;
+    it.adicionado = Math.max(...it.ofertas.map(o => +new Date(o.p.adicionado_em || 0))) || it.idx;
+    it.termo = termometro(it.melhor);
+    const n = it.melhor.r?.preco_normal;
+    it.desconto = n && it.melhor.efetivo != null ? 1 - it.melhor.efetivo / n : -1;
+    it.imagem = it.ofertas.map(o => o.r?.imagem).find(Boolean);
+    return it;
+  });
+}
+const grupos = () => [...new Set(produtos.map(p => p.grupo).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR"));
+
+const ORDENS = {
+  momento: (a, b) => (a.termo?.nivel ?? 6) - (b.termo?.nivel ?? 6) || b.desconto - a.desconto,
+  desconto: (a, b) => b.desconto - a.desconto,
+  preco: (a, b) => (a.melhor.efetivo ?? 1e12) - (b.melhor.efetivo ?? 1e12),
+  recentes: (a, b) => b.adicionado - a.adicionado,
+  nome: (a, b) => a.nome.localeCompare(b.nome, "pt-BR"),
+};
+let ordem = "momento";
+try { ordem = localStorage.getItem("mp-ordem") || ordem; } catch(e){}
+
+/* ---------- peças do cartão ---------- */
+function etiqueta(it){
+  const o = it.melhor, r = o.r, alvo = it.alvo;
   if (!r || r.atual == null) {
     const txt = !r || !r.ultima_verificacao ? (r && r.erro ? "Sem leitura" : "Aguardando") : "Indisponível";
     return `<div class="tag off"><span class="price">${txt}</span>${alvo?`<span class="target">alvo ${brl(alvo)}</span>`:""}</div>`;
   }
   const [int, cent] = r.atual.toFixed(2).split(".");
-  const intFmt = Number(int).toLocaleString("pt-BR");
-  const hit = alvo && r.atual <= alvo;
+  const hit = alvo && o.efetivo <= alvo;
+  const alvoTxt = alvo ? (hit ? (o.efetivo < r.atual ? "No alvo com cupom" : "Chegou no alvo " + brl(alvo)) : "alvo " + brl(alvo)) : "sem alvo";
+  const onde = it.ofertas.length > 1 ? `<span class="where">mais barato: ${nomeLoja(o.loja)}</span>` : "";
   return `<div class="tag ${hit?"hit":""}" aria-label="Preço atual ${brl(r.atual)}">
-    <span class="cur">R$</span><span class="price">${intFmt}</span><span class="cents">,${cent}</span>
-    <span class="target">${alvo ? (hit ? "Chegou no alvo " + brl(alvo) : "alvo " + brl(alvo)) : "sem alvo"}</span></div>`;
+    <span class="cur">R$</span><span class="price">${Number(int).toLocaleString("pt-BR")}</span><span class="cents">,${cent}</span>
+    <span class="target">${alvoTxt}</span>${onde}</div>`;
+}
+function erroDe(r){
+  if (!r?.erro) return "";
+  const nf = r.falhas_seguidas || 1;
+  return nf >= 3 ? `<span class="err" title="${esc(r.erro)}">Sem leitura há ${nf} tentativas</span>`
+                 : `<span title="${esc(r.erro)}">Loja bloqueou a última leitura, tentando de novo</span>`;
+}
+function deltaDe(r){
+  const pts = r?.historico || [];
+  if (pts.length < 2) return "";
+  const ini = pts[0].p, fim = pts[pts.length-1].p, pct = (fim / ini - 1) * 100;
+  if (Math.abs(pct) < .5) return "";
+  return `<span class="delta ${pct<0?"down":"up"}">${pct<0?"▼":"▲"} ${Math.abs(pct).toFixed(0)}% desde ${new Date(pts[0].t).toLocaleDateString("pt-BR",{day:"2-digit",month:"short"})}</span>`;
+}
+function detalheOferta(o, alvo, multi){
+  const r = o.r, pts = r?.historico || [];
+  const temC = pts.some(x => x.c != null);
+  return `<section class="offer-detail">
+    ${multi ? `<h4>${nomeLoja(o.loja)}</h4>` : ""}
+    ${temC ? `<div class="legend"><span><i></i>Preço</span><span><i class="c"></i>Preço com cupom</span></div>` : ""}
+    <div class="chart-wrap">${grafico(pts, alvo, 900, multi ? 170 : 220, true)}<div class="tip" hidden></div></div>
+    <div class="stats">
+      <span>Preço normal (7 dias) <b>${brl(r?.preco_normal)}</b></span>
+      <span>Menor <b>${brl(r?.menor)}</b></span><span>Maior <b>${brl(r?.maior)}</b></span>${
+      temC ? `<span>Menor com cupom <b>${brl(Math.min(...pts.filter(x => x.c != null).map(x => x.c)))}</b></span>` : ""}
+      <span>Leituras <b>${pts.length}</b></span><span>Verificado <b>${quando(r?.ultima_verificacao)}</b></span>
+    </div>${r?.cupom ? `<p class="small">Cupom na página: “${esc(r.cupom.descricao)}”</p>` : ""}${
+    r?.erro ? `<p class="small ${(r.falhas_seguidas||1) >= 3 ? "err" : ""}">Última tentativa (${quando(r.ultima_falha)}): ${esc(r.erro)}</p>` : ""}
+  </section>`;
+}
+function cartao(it){
+  const o = it.melhor, r = o.r, multi = it.ofertas.length > 1;
+  const img = it.imagem ? `<img class="thumb" src="${esc(it.imagem)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+                        : `<div class="thumb empty" aria-hidden="true">📦</div>`;
+  const lojas = multi ? it.ofertas.map(x => nomeLoja(x.loja)).join(" · ") : nomeLoja(o.loja);
+  const termo = it.termo ? `<span class="termo ${it.termo.cls}">${it.termo.txt}</span>` : "";
+  const ofertas = multi ? `<div class="offers">${[...it.ofertas].sort((a, b) => (a.efetivo ?? 1e12) - (b.efetivo ?? 1e12)).map(x => `
+      <div class="offer ${x === o && x.efetivo != null ? "best" : ""}">
+        <span class="store">${nomeLoja(x.loja)}</span>
+        <b>${brl(x.r?.atual)}</b>${x.r?.cupom ? `<span class="coupon">${brl(x.r.cupom.preco_final)} c/ cupom</span>` : ""}
+        ${x === o && x.efetivo != null ? `<span class="pill">mais barato</span>` : ""}${erroDe(x.r)}
+        <span class="offer-actions"><a href="${esc(x.p.url)}" target="_blank" rel="noopener">abrir</a>
+        <button class="linkbtn" type="button" data-act="del-offer" data-id="${esc(x.p.id)}">remover loja</button></span>
+      </div>`).join("")}</div>` : "";
+  const amz = it.ofertas.find(x => x.loja === "amazon" && asinDe(x.p));
+  const keepa = amz ? `<a class="btn ghost" href="https://keepa.com/#!product/12-${asinDe(amz.p)}" target="_blank" rel="noopener">12 meses no Keepa ↗</a>` : "";
+  const detalhe = aberto === it.key ? `<div class="detail">${it.ofertas.map(x => detalheOferta(x, it.alvo, multi)).join("")}</div>` : "";
+  return `<article class="item" data-key="${esc(it.key)}">
+    ${img}
+    <div class="info">
+      <h3 class="name"><a href="${esc(o.p.url)}" target="_blank" rel="noopener">${esc(it.nome)}</a></h3>
+      <div class="meta">${it.grupo ? `<span class="grp">${esc(it.grupo)}</span>` : ""}<span class="store">${lojas}</span>${termo}${deltaDe(r)}${
+        !multi && r?.cupom ? `<span class="coupon" title="${esc(r.cupom.descricao)}">🎟️ ${brl(r.cupom.preco_final)} com cupom</span>` : ""}${
+        r?.preco_normal ? `<span>normal ${brl(r.preco_normal)}</span>` : ""}${
+        r?.menor != null ? `<span>menor ${brl(r.menor)}</span>` : ""}${multi ? "" : erroDe(r)}</div>
+      ${ofertas}
+      <div data-act="toggle" title="Ver histórico">${grafico(r?.historico || [], it.alvo, 420, 46, false)}</div>
+      <div class="row-actions">
+        <button class="btn ghost" type="button" data-act="toggle">${aberto===it.key?"Fechar histórico":"Histórico"}</button>
+        <button class="btn ghost" type="button" data-act="edit">Editar</button>
+        ${keepa}
+        <button class="btn ghost" type="button" data-act="del">Remover</button>
+      </div>
+    </div>
+    ${etiqueta(it)}
+    ${detalhe}
+  </article>`;
 }
 
 /* ---------- render ---------- */
+function renderFiltros(){
+  const gs = grupos();
+  const chips = [["todos","Todos"],["alvo","No preço-alvo"],["momento","Bom momento"],
+    ...gs.map(g => ["grupo:" + g, g]), ["loja:amazon","Amazon"],["loja:mercadolivre","Mercado Livre"]];
+  if (!chips.some(([f]) => f === filtro)) filtro = "todos";
+  $("#chips").innerHTML = chips.map(([f, t]) =>
+    `<button class="chip ${f.startsWith("grupo:")?"g":""}" data-f="${esc(f)}" aria-pressed="${f===filtro}" type="button">${esc(t)}</button>`).join("");
+  $("#ordem").value = ordem;
+  $("#listaGrupos").innerHTML = gs.map(g => `<option value="${esc(g)}">`).join("");
+}
 function render(){
+  renderFiltros();
   const list = $("#list");
-  const at = hist.atualizado_em;
-  $("#status").textContent = produtos.length
-    ? `${produtos.length} produto${produtos.length>1?"s":""} monitorado${produtos.length>1?"s":""}. Última verificação ${quando(at)}.`
+  const itens = montarItens();
+  $("#status").textContent = itens.length
+    ? `${itens.length} produto${itens.length>1?"s":""} monitorado${itens.length>1?"s":""}. Última verificação ${quando(hist.atualizado_em)}.`
     : "Nenhum produto ainda.";
-
-  if (!produtos.length) {
+  if (!itens.length) {
     list.innerHTML = `<div class="empty-state"><h2>Comece por um produto</h2>
-      <p>Cole o link de algo que você quer comprar na Amazon ou no Mercado Livre. O robô confere o preço a cada 30 minutos e avisa quando baixar.</p>
+      <p>Cole o link de algo que você quer comprar na Amazon ou no Mercado Livre, ou mande o link para o seu bot no Telegram. O robô confere o preço a cada 30 minutos e avisa quando baixar.</p>
       <button class="btn primary" type="button" data-act="add">Adicionar produto</button></div>`;
     return;
   }
+  const vis = itens.filter(it => {
+    if (filtro === "todos") return true;
+    if (filtro === "alvo") return it.alvo && it.melhor.efetivo != null && it.melhor.efetivo <= it.alvo;
+    if (filtro === "momento") return it.termo && it.termo.nivel <= 2;
+    if (filtro.startsWith("grupo:")) return it.grupo === filtro.slice(6);
+    if (filtro.startsWith("loja:")) return it.ofertas.some(o => o.loja === filtro.slice(5));
+    return true;
+  }).sort(ORDENS[ordem] || ORDENS.momento);
+  if (!vis.length) { list.innerHTML = `<div class="empty-state"><p>Nenhum produto neste filtro.</p></div>`; return; }
 
-  const itens = produtos.map((p, i) => ({p, i, r: hist.produtos[p.id] || null, l: loja(p.url)}))
-    .filter(({p, r, l}) => filtro === "todos" ? true
-      : filtro === "alvo" ? (r && r.atual != null && p.preco_alvo && r.atual <= p.preco_alvo)
-      : l === filtro);
-
-  if (!itens.length) { list.innerHTML = `<div class="empty-state"><p>Nenhum produto neste filtro.</p></div>`; return; }
-
-  list.innerHTML = itens.map(({p, r, l}) => {
-    const alvo = p.preco_alvo ? Number(p.preco_alvo) : null;
-    const nome = p.nome || r?.nome || r?.titulo_loja || "Produto sem nome";
-    const pts = r?.historico || [];
-    let delta = "";
-    if (pts.length > 1) {
-      const ini = pts[0].p, fim = pts[pts.length-1].p, pct = (fim/ini - 1) * 100;
-      if (Math.abs(pct) >= .5) delta = `<span class="delta ${pct<0?"down":"up"}">${pct<0?"▼":"▲"} ${Math.abs(pct).toFixed(0)}% desde ${new Date(pts[0].t).toLocaleDateString("pt-BR",{day:"2-digit",month:"short"})}</span>`;
-    }
-    const nf = r?.falhas_seguidas || (r?.erro ? 1 : 0);
-    const erro = !r?.erro ? "" : nf >= 3
-      ? `<span class="err" title="${esc(r.erro)}">Sem leitura há ${nf} tentativas</span>`
-      : `<span title="${esc(r.erro)}">Loja bloqueou a última leitura, tentando de novo</span>`;
-    const img = r?.imagem ? `<img class="thumb" src="${esc(r.imagem)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
-                          : `<div class="thumb empty" aria-hidden="true">📦</div>`;
-    const detalhe = aberto === p.id ? `<div class="detail">
-        ${pts.some(x => x.c != null) ? `<div class="legend"><span><i></i>Preço</span><span><i class="c"></i>Preço com cupom</span></div>` : ""}
-        <div class="chart-wrap">${grafico(pts, alvo, 900, 220, true)}<div class="tip" hidden></div></div>
-        <div class="stats">
-          <span>Preço normal (7 dias) <b>${brl(r?.preco_normal)}</b></span>
-          <span>Menor <b>${brl(r?.menor)}</b></span><span>Maior <b>${brl(r?.maior)}</b></span>${
-            pts.some(x => x.c != null) ? `<span>Menor com cupom <b>${brl(Math.min(...pts.filter(x => x.c != null).map(x => x.c)))}</b></span>` : ""}
-          <span>Leituras <b>${pts.length}</b></span><span>Verificado <b>${quando(r?.ultima_verificacao)}</b></span>
-        </div>${r?.cupom ? `<p class="small">Cupom na página: “${esc(r.cupom.descricao)}”</p>` : ""}${r?.erro ? `<p class="small ${(r.falhas_seguidas||1) >= 3 ? "err" : ""}">Última tentativa (${quando(r.ultima_falha)}): ${esc(r.erro)}</p>` : ""}</div>` : "";
-    return `<article class="item" data-id="${esc(p.id)}">
-      ${img}
-      <div class="info">
-        <h3 class="name"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(nome)}</a></h3>
-        <div class="meta"><span class="store">${nomeLoja(l)}</span>${delta}${
-          r?.cupom ? `<span class="coupon" title="${esc(r.cupom.descricao)}">🎟️ ${brl(r.cupom.preco_final)} com cupom</span>` : ""}${
-          r?.preco_normal ? `<span>normal ${brl(r.preco_normal)}</span>` : ""}${
-          r?.menor != null ? `<span>menor ${brl(r.menor)}</span>` : ""}${erro}</div>
-        <div data-act="toggle" title="Ver histórico">${grafico(pts, alvo, 420, 46, false)}</div>
-        <div class="row-actions">
-          <button class="btn ghost" type="button" data-act="toggle">${aberto===p.id?"Fechar histórico":"Histórico"}</button>
-          <button class="btn ghost" type="button" data-act="edit">Editar alvo</button>
-          <button class="btn ghost" type="button" data-act="del">Remover</button>
-        </div>
-      </div>
-      ${etiqueta(r, alvo)}
-      ${detalhe}
-    </article>`;
-  }).join("");
+  const gs = grupos();
+  if (filtro === "todos" && gs.length) {
+    const secoes = [...gs, ""].map(g => [g, vis.filter(it => it.grupo === g)]).filter(([, l]) => l.length);
+    list.innerHTML = secoes.map(([g, l]) => `<h2 class="sec">${esc(g || "Sem grupo")} <span>${l.length}</span></h2>${l.map(cartao).join("")}`).join("");
+  } else {
+    list.innerHTML = vis.map(cartao).join("");
+  }
   ligarTooltip();
 }
 
@@ -514,14 +675,23 @@ function ligarTooltip(){
   });
 }
 
-/* ---------- ações ---------- */
-function abrirProd(p){
+/* ---------- diálogos ---------- */
+const itemPorChave = k => montarItens().find(it => it.key === k);
+function abrirProd(key){
   if (!cfg.token) { toast("Primeiro configure o acesso ao GitHub."); abrirCfg(); return; }
-  editando = p || null;
-  $("#prodTitle").textContent = p ? "Editar produto" : "Adicionar produto";
-  $("#fUrl").value = p?.url || ""; $("#fUrl").readOnly = !!p;
-  $("#fAlvo").value = p?.preco_alvo ?? ""; $("#fNome").value = p?.nome || "";
-  $("#dlgProd").showModal(); (p ? $("#fAlvo") : $("#fUrl")).focus();
+  editando = key || null;
+  const it = key ? itemPorChave(key) : null;
+  $("#prodTitle").textContent = it ? "Editar produto" : "Adicionar produto";
+  $("#hintProd").textContent = it ? "As mudanças valem para todas as lojas deste produto."
+                                  : "Cole o link do produto na Amazon ou no Mercado Livre.";
+  $("#wrapUrl").hidden = !!it; $("#fUrl").required = !it; $("#fUrl").value = "";
+  $("#wrapComparar").hidden = !!it || !produtos.length;
+  $("#fComparar").innerHTML = `<option value="">Não, é um produto novo</option>` +
+    montarItens().map(x => `<option value="${esc(x.key)}">${esc(x.nome.slice(0, 60))}</option>`).join("");
+  $("#wrapOutro").hidden = !it; $("#fOutro").value = "";
+  $("#fAlvo").value = it?.alvo ?? ""; $("#fNome").value = it ? (it.ofertas.map(o => o.p.nome).find(Boolean) || "") : "";
+  $("#fGrupo").value = it?.grupo || "";
+  $("#dlgProd").showModal(); (it ? $("#fAlvo") : $("#fUrl")).focus();
 }
 function abrirCfg(){
   $("#cOwner").value = cfg.owner || ""; $("#cRepo").value = cfg.repo || "";
@@ -539,6 +709,11 @@ $("#btnTheme").onclick = () => {
   document.documentElement.dataset.theme = escuro ? "light" : "dark";
   try { localStorage.setItem(THEME_KEY, document.documentElement.dataset.theme); } catch(e){}
 };
+$("#ordem").onchange = ev => { ordem = ev.target.value; try { localStorage.setItem("mp-ordem", ordem); } catch(e){} render(); };
+$("#chips").addEventListener("click", ev => {
+  const c = ev.target.closest(".chip"); if (!c) return;
+  filtro = c.dataset.f; try { localStorage.setItem("mp-filtro", filtro); } catch(e){} render();
+});
 
 $("#formCfg").onsubmit = ev => {
   ev.preventDefault();
@@ -551,27 +726,46 @@ let salvando = false;
 $("#formProd").onsubmit = async ev => {
   ev.preventDefault();
   if (salvando) return;
-  const url = $("#fUrl").value.trim();
   const alvo = $("#fAlvo").value ? Number($("#fAlvo").value) : null;
-  const nome = $("#fNome").value.trim();
-  if (!loja(url)) { toast("Use um link da Amazon ou do Mercado Livre."); return; }
+  const nome = $("#fNome").value.trim() || undefined;
+  const grupoRaw = $("#fGrupo").value.trim().replace(/^#/, "");
+  const grupo = grupoRaw ? grupoRaw[0].toUpperCase() + grupoRaw.slice(1) : undefined;
+  const agoraIso = new Date().toISOString();
   const btn = $("#btnSaveProd"); btn.disabled = true; salvando = true;
   try {
     if (editando) {
-      const id = editando.id;
-      await gravarProdutos(lista => lista.map(x => (x.id || idDe(x)) === id
-        ? {...x, preco_alvo: alvo, nome: nome || undefined} : x), `Atualiza alvo: ${nome || id}`);
-      toast("Produto atualizado.");
+      const key = editando, outro = $("#fOutro").value.trim();
+      if (outro && !loja(outro)) throw new Error("O link da outra loja precisa ser da Amazon ou do Mercado Livre.");
+      let jaExistia = false;
+      await gravarProdutos(lista => {
+        const out = lista.map(x => chaveDe(x) === key
+          ? {...x, preco_alvo: alvo, nome, grupo, item: outro ? key : x.item} : x);
+        if (outro) {
+          const n = {url: outro, preco_alvo: alvo, grupo, item: key, adicionado_em: agoraIso};
+          n.id = idDe(n) || ("p-" + Date.now());
+          if (out.some(x => x.id === n.id)) jaExistia = true; else out.push(n);
+        }
+        return out;
+      }, `Atualiza produto: ${nome || key}`);
+      toast(jaExistia ? "Esse link já estava na lista; o resto foi salvo." : outro ? "Loja adicionada ao produto." : "Produto atualizado.");
     } else {
-      const novo = {url, preco_alvo: alvo}; if (nome) novo.nome = nome;
+      const url = $("#fUrl").value.trim();
+      if (!loja(url)) throw new Error("Use um link da Amazon ou do Mercado Livre.");
+      const comparar = $("#fComparar").value;
+      const novo = {url, preco_alvo: alvo, nome, grupo, adicionado_em: agoraIso};
       novo.id = idDe(novo) || ("p-" + Date.now());
       let jaExistia = false;
       await gravarProdutos(lista => {
         if (lista.some(x => x.id === novo.id)) { jaExistia = true; return lista; }
-        return [...lista, novo];
+        if (!comparar) return [...lista, novo];
+        const doItem = lista.filter(x => chaveDe(x) === comparar);
+        novo.item = comparar;
+        novo.grupo = novo.grupo || doItem.map(x => x.grupo).find(Boolean);
+        novo.preco_alvo = novo.preco_alvo ?? doItem.map(x => x.preco_alvo).find(v => v) ?? null;
+        return [...lista.map(x => chaveDe(x) === comparar ? {...x, item: comparar} : x), novo];
       }, `Adiciona produto: ${nome || url.slice(0,60)}`);
       toast(jaExistia ? "Esse produto já está na lista."
-                      : "Produto adicionado. A primeira verificação começa em instantes.", 5500);
+        : "Produto adicionado. A primeira verificação começa em instantes.", 5500);
     }
     $("#dlgProd").close();
   } catch(e) { toast(e.message, 6000); }
@@ -588,25 +782,24 @@ $("#btnRun").onclick = async () => {
   b.disabled = false;
 };
 
-document.querySelectorAll(".chip").forEach(c => c.onclick = () => {
-  filtro = c.dataset.f;
-  document.querySelectorAll(".chip").forEach(x => x.setAttribute("aria-pressed", x === c));
-  render();
-});
-
 $("#list").addEventListener("click", async ev => {
   const el = ev.target.closest("[data-act]"); if (!el) return;
   const act = el.dataset.act;
   if (act === "add") return abrirProd();
-  const art = el.closest(".item"); const id = art?.dataset.id;
-  const p = produtos.find(x => x.id === id);
-  if (act === "toggle") { aberto = aberto === id ? null : id; render(); }
-  if (act === "edit") abrirProd(p);
-  if (act === "del") {
+  const key = el.closest(".item")?.dataset.key;
+  if (act === "toggle") { aberto = aberto === key ? null : key; return render(); }
+  if (act === "edit") return abrirProd(key);
+  if (act === "del" || act === "del-offer") {
     if (!cfg.token) { toast("Configure o acesso ao GitHub para remover."); return abrirCfg(); }
-    if (!confirm("Remover este produto do monitoramento?")) return;
-    try { await gravarProdutos(l => l.filter(x => (x.id || idDe(x)) !== id), `Remove produto: ${id}`); toast("Produto removido."); }
-    catch(e) { toast(e.message, 6000); }
+    const it = itemPorChave(key);
+    const msg = act === "del-offer" ? "Remover esta loja do produto?"
+      : it && it.ofertas.length > 1 ? `Remover o produto das ${it.ofertas.length} lojas?` : "Remover este produto do monitoramento?";
+    if (!confirm(msg)) return;
+    try {
+      if (act === "del-offer") await gravarProdutos(l => l.filter(x => x.id !== el.dataset.id), `Remove loja: ${el.dataset.id}`);
+      else await gravarProdutos(l => l.filter(x => chaveDe(x) !== key), `Remove produto: ${key}`);
+      toast("Removido.");
+    } catch(e) { toast(e.message, 6000); }
   }
 });
 
