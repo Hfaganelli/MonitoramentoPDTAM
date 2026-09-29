@@ -58,7 +58,7 @@ CUPOM_PCT = _pct("ALERTA_CUPOM_PCT", 20)
 DIAS_NORMAL = 7        # janela do "preço normal"
 MAX_PONTOS = 4000      # pontos de histórico por produto
 PONTO_MIN_INTERVALO = timedelta(hours=1)   # sem mudança, grava 1 ponto por hora
-SALVAR_MIN_INTERVALO = timedelta(minutes=30)  # sem mudança, salva o arquivo a cada 30 min
+SALVAR_MIN_INTERVALO = timedelta(minutes=15)  # sem mudança, ainda salva o horário da verificação (evita rajada de commits)
 FALHAS_ALERTA = 12      # 12 falhas seguidas (~6 h rodando a cada 30 min) = avisa no Telegram
 BRT = timezone(timedelta(hours=-3))  # horário de Brasília
 RESUMO_DIA, RESUMO_HORA = 6, 9      # resumo semanal: domingo (6), a partir das 9h
