@@ -2,7 +2,9 @@ name: Monitor de preços
 
 on:
   schedule:
-    - cron: "7,37 * * * *"   # a cada 30 minutos (evita a virada da hora, quando o GitHub fica mais lento)
+    # O GitHub atrasa ou descarta execuções agendadas em horários de pico. Por isso há 4 gatilhos por hora;
+    # o passo "guarda" abaixo pula a rodada se já houve verificação nos últimos 25 minutos.
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:          # botão "Verificar agora" do painel
     inputs:
       teste_telegram:
@@ -31,12 +33,33 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Guarda (evita verificar duas vezes em menos de 25 min)
+        id: guarda
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          pular = False
+          if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+              try:
+                  d = json.load(open("data/history.json"))
+                  t = datetime.fromisoformat(d["atualizado_em"])
+                  pular = (datetime.now(timezone.utc) - t).total_seconds() < 25 * 60
+              except Exception:
+                  pass
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("pular=" + ("true" if pular else "false") + "\n")
+          print("Rodada pulada (verificação recente):", pular)
+          PY
+
       - uses: actions/setup-python@v6
+        if: ${{ steps.guarda.outputs.pular != 'true' }}
         with:
           python-version: "3.12"
           cache: pip
 
       - run: pip install -r requirements.txt
+        if: ${{ steps.guarda.outputs.pular != 'true' }}
 
       - name: Testar Telegram
         if: ${{ inputs.teste_telegram }}
@@ -46,7 +69,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
       - name: Verificar preços
-        if: ${{ !inputs.teste_telegram }}
+        if: ${{ !inputs.teste_telegram && steps.guarda.outputs.pular != 'true' }}
         run: python scraper/monitor.py ${{ inputs.enviar_resumo && '--com-resumo' || '' }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -56,7 +79,7 @@ jobs:
           ALERTA_CUPOM_PCT: ${{ vars.ALERTA_CUPOM_PCT }}
 
       - name: Salvar histórico e lista
-        if: ${{ !inputs.teste_telegram }}
+        if: ${{ !inputs.teste_telegram && steps.guarda.outputs.pular != 'true' }}
         run: |
           git config user.name "monitor-precos[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
