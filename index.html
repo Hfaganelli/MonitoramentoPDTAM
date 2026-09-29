@@ -266,7 +266,7 @@ input:focus{border-color:var(--focus);outline:none}
 (() => {
 const $ = s => document.querySelector(s);
 const CFG_KEY = "mp-config", THEME_KEY = "mp-theme";
-let produtos = [], hist = {produtos:{}}, filtro = "todos", aberto = null, editando = null;
+let produtos = [], hist = {produtos:{}}, filtro = "todos", aberto = null, editando = null, robo = null;
 try { filtro = localStorage.getItem("mp-filtro") || filtro; } catch(e){}
 
 /* ---------- configuração ---------- */
@@ -343,6 +343,21 @@ async function carregar(){
   produtos = semDuplicados(Array.isArray(p) ? p : []);
   hist = h && h.produtos ? h : {produtos:{}};
   render();
+  verificarRobo();
+}
+// Consulta o GitHub para saber quando o robô rodou pela última vez (inclusive rodadas que não mudaram nada)
+async function verificarRobo(){
+  if (!cfg.owner || !cfg.repo) return;
+  try {
+    const h = {Accept:"application/vnd.github+json"};
+    if (cfg.token) h.Authorization = `Bearer ${cfg.token}`;
+    const r = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/actions/workflows/monitor.yml/runs?per_page=5&t=${Date.now()}`, {headers:h, cache:"no-store"});
+    if (!r.ok) return;
+    const runs = (await r.json()).workflow_runs || [];
+    if (!runs.length) return;
+    robo = {quando: runs[0].created_at, falhou: runs[0].status === "completed" && runs[0].conclusion === "failure"};
+    render();
+  } catch(e){}
 }
 
 /* ---------- GitHub API ---------- */
@@ -626,9 +641,15 @@ function render(){
   renderFiltros();
   const list = $("#list");
   const itens = montarItens();
-  $("#status").textContent = itens.length
+  let aviso = "";
+  if (robo) {
+    const min = (Date.now() - new Date(robo.quando)) / 60000;
+    if (robo.falhou) aviso = " A última execução do robô falhou; veja a aba Actions no GitHub.";
+    else if (min > 90) aviso = ` O GitHub não executa o robô há ${Math.round(min / 60)} h (atraso do agendamento deles).`;
+  }
+  $("#status").innerHTML = (itens.length
     ? `${itens.length} produto${itens.length>1?"s":""} monitorado${itens.length>1?"s":""}. Última verificação ${quando(hist.atualizado_em)}.`
-    : "Nenhum produto ainda.";
+    : "Nenhum produto ainda.") + (aviso ? ` <span class="err">${esc(aviso)}</span>` : "");
   if (!itens.length) {
     list.innerHTML = `<div class="empty-state"><h2>Comece por um produto</h2>
       <p>Cole o link de algo que você quer comprar na Amazon ou no Mercado Livre, ou mande o link para o seu bot no Telegram. O robô confere o preço a cada 30 minutos e avisa quando baixar.</p>
