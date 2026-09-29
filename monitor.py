@@ -68,7 +68,18 @@ def agora_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def get(url, headers=None):
+_SESSAO = None
+
+
+def sessao():
+    """Uma sessão por execução: guarda cookies entre as páginas, como um navegador."""
+    global _SESSAO
+    if _SESSAO is None:
+        _SESSAO = http.Session()
+    return _SESSAO
+
+
+def get(url, headers=None, perfil="chrome"):
     h = {
         "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.7,en;q=0.6",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -80,8 +91,8 @@ def get(url, headers=None):
         h.update(headers)
     opts = {"headers": h, "timeout": 30, "allow_redirects": True}
     if IMPERSONATE:
-        opts["impersonate"] = "chrome"
-    return http.get(url, **opts)
+        opts["impersonate"] = perfil
+    return sessao().get(url, **opts)
 
 
 def numero(valor):
@@ -159,10 +170,15 @@ RE_NAO_APLICAVEL = re.compile(
     r"|clientes?\s+novos?|boas[- ]vindas|first\s+(?:order|purchase)|new\s+customers?", re.I)
 
 
-def analisar_cupom(texto, preco):
+RE_CODIGO = re.compile(r"\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{5,20}\b")
+
+
+def analisar_cupom(texto, preco, checar_restricao=True):
     """Lê um texto de cupom ('Aplicar cupom de 15%', 'R$ 50 OFF com cupom') e calcula o preço final."""
     t = " ".join((texto or "").split())
-    if not preco or not re.search(r"cupo[mn]|coupon", t, re.I) or RE_NAO_APLICAVEL.search(t):
+    if not preco or not re.search(r"cupo[mn]|coupon", t, re.I):
+        return None
+    if checar_restricao and RE_NAO_APLICAVEL.search(t):
         return None
     m = RE_MINIMO.search(t)
     if m and (parse_brl(m.group(1)) or 0) > preco:
@@ -189,18 +205,55 @@ def analisar_cupom(texto, preco):
             "preco_final": round(preco - desconto, 2)}
 
 
+def _contexto(el, niveis=4, limite=900):
+    """Texto dos blocos em volta do elemento (o aviso de restrição costuma ficar ao lado)."""
+    textos, p = [], el
+    for _ in range(niveis):
+        p = p.parent
+        if p is None or p.name in ("body", "html", "[document]"):
+            break
+        t = p.get_text(" ", strip=True)
+        if len(t) > limite:
+            break
+        textos.append(t)
+    return " ".join(textos)
+
+
 def melhor_cupom(soup, preco, seletores):
-    vistos, melhor = set(), None
+    """Retorna (melhor cupom válido, lista de preços finais de cupons recusados)."""
+    # códigos de cupons restritos (primeira compra etc.) mencionados em qualquer lugar da página
+    restritos = set()
+    for trecho in soup.find_all(string=RE_NAO_APLICAVEL):
+        el = trecho.parent
+        for _ in range(4):
+            if el is None:
+                break
+            t = el.get_text(" ", strip=True)
+            if len(t) > 900:
+                break
+            if re.search(r"cupo[mn]|coupon", t, re.I):
+                restritos.update(RE_CODIGO.findall(t))
+                break
+            el = el.parent
+
+    vistos, melhor, recusados = set(), None, set()
     for sel in seletores:
         for el in soup.select(sel):
             txt = el.get_text(" ", strip=True)
             if not txt or len(txt) > 400 or txt in vistos:
                 continue
             vistos.add(txt)
-            c = analisar_cupom(txt, preco)
-            if c and (melhor is None or c["desconto"] > melhor["desconto"]):
-                melhor = c
-    return melhor
+            bruto = analisar_cupom(txt, preco, checar_restricao=False)
+            if not bruto:
+                continue
+            restrito = (RE_NAO_APLICAVEL.search(txt + " " + _contexto(el))
+                        or any(cod in txt for cod in restritos))
+            if restrito:
+                recusados.add(bruto["preco_final"])
+                continue
+            if melhor is None or bruto["desconto"] > melhor["desconto"]:
+                melhor = bruto
+    return melhor, sorted(recusados)
 
 
 CUPOM_AMAZON = ['[id*="oupon"]', '[class*="oupon"]', "#promoPriceBlockMessage_feature_div",
@@ -210,6 +263,9 @@ CUPOM_ML = ['[class*="coupon"]', '[class*="cupom"]', '[id*="coupon"]', ".ui-pdp-
 
 
 # ---------------------------------------------------------------------- Amazon
+
+_AQUECIDOS = set()
+
 
 def eh_captcha_amazon(html):
     return ("validateCaptcha" in html or "api-services-support@amazon.com" in html
@@ -224,18 +280,43 @@ def amazon(url):
 
     m = re.search(r"/(?:dp|gp/product|gp/aw/d|product)/([A-Z0-9]{10})", url)
     host = urlparse(url).hostname or "www.amazon.com.br"
-    url_limpa = f"https://{host}/dp/{m.group(1)}" if m else url
+    if "amazon." not in host:
+        host = "www.amazon.com.br"
 
-    html, status = "", None
-    for tentativa in range(3):
-        r = get(url_limpa)
-        html, status = r.text, r.status_code
-        if status == 200 and not eh_captcha_amazon(html):
-            break
-        time.sleep(6 + random.random() * 8)
+    # 1ª visita da rodada: abre a home para receber os cookies de sessão, como um navegador
+    if host not in _AQUECIDOS:
+        _AQUECIDOS.add(host)
+        try:
+            get(f"https://{host}/")
+            time.sleep(1.5 + random.random() * 2)
+        except Exception:
+            pass
+
+    if m:
+        asin = m.group(1)
+        tentativas = [(f"https://{host}/dp/{asin}", "chrome"),
+                      (f"https://{host}/gp/product/{asin}?psc=1", "edge"),
+                      (f"https://{host}/gp/aw/d/{asin}", "safari_ios")]  # página mobile, mais leve
     else:
-        raise ErroColeta(f"Amazon bloqueou a leitura (HTTP {status} / captcha). "
-                         "Tenta de novo na próxima rodada.")
+        tentativas = [(url, "chrome"), (url, "edge"), (url, "safari_ios")]
+
+    html, motivos = None, []
+    for u, perfil in tentativas:
+        try:
+            r = get(u, perfil=perfil)
+        except Exception as e:
+            motivos.append(f"conexão ({type(e).__name__})")
+            continue
+        if r.status_code == 404:
+            raise ErroColeta("Produto não encontrado na Amazon (404). O link pode ter mudado.")
+        if r.status_code == 200 and not eh_captcha_amazon(r.text):
+            html = r.text
+            break
+        motivos.append("captcha" if r.status_code == 200 else f"HTTP {r.status_code}")
+        time.sleep(4 + random.random() * 5)
+    if html is None:
+        raise ErroColeta("Amazon bloqueou a leitura (" + ", ".join(motivos) + "). "
+                         "Nova tentativa na próxima rodada.")
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -265,6 +346,10 @@ def amazon(url):
         "#price_inside_buybox",
         "#kindle-price",
         "#tp_price_block_total_price_ww .a-offscreen",
+        "#apex_offerDisplay_desktop .a-price .a-offscreen",
+        "#buybox .a-price .a-offscreen",
+        '.a-price[data-a-color="price"] .a-offscreen',
+        "#corePrice_mobile_feature_div .a-offscreen",
     ]
     for sel in seletores:
         el = soup.select_one(sel)
@@ -298,8 +383,9 @@ def amazon(url):
             raise ErroColeta("Página da Amazon veio sem produto (possível bloqueio).")
         raise ErroColeta("Preço não encontrado na página da Amazon.")
 
-    cupom = melhor_cupom(soup, preco, CUPOM_AMAZON) if preco else None
+    cupom, recusados = melhor_cupom(soup, preco, CUPOM_AMAZON) if preco else (None, [])
     return {"titulo": titulo, "imagem": imagem, "preco": preco, "cupom": cupom,
+            "cupons_recusados": recusados,
             "disponivel": bool(preco) and not indisponivel}
 
 
@@ -434,8 +520,9 @@ def mercadolivre(url):
     if not preco and disponivel:
         raise ErroColeta("Preço não encontrado na página do Mercado Livre.")
 
-    cupom = melhor_cupom(soup, preco, CUPOM_ML) if preco else None
+    cupom, recusados = melhor_cupom(soup, preco, CUPOM_ML) if preco else (None, [])
     return {"titulo": titulo, "imagem": imagem, "preco": preco, "cupom": cupom,
+            "cupons_recusados": recusados,
             "disponivel": disponivel and bool(preco)}
 
 
@@ -562,7 +649,8 @@ def main():
             loja, dados = coletar(p["url"])
         except Exception as e:
             falhas += 1
-            reg.update({"url": p["url"], "erro": str(e), "ultima_falha": agora_iso()})
+            reg.update({"url": p["url"], "erro": str(e), "ultima_falha": agora_iso(),
+                        "falhas_seguidas": reg.get("falhas_seguidas", 0) + 1})
             print(f"   ✗ {e}")
             time.sleep(2 + random.random() * 3)
             continue
@@ -571,6 +659,13 @@ def main():
         preco = dados.get("preco")
         cupom = dados.get("cupom")
         alvo = numero(p.get("preco_alvo"))
+        # cupons que a página marca como restritos: some com eles do histórico também
+        recusados = set(dados.get("cupons_recusados") or [])
+        if recusados:
+            for ponto in reg.get("historico", []):
+                if ponto.get("c") in recusados:
+                    ponto.pop("c", None)
+            reg["alerta_cupom"] = None
         normal = preco_normal(reg.get("historico", []), agora)  # calculado ANTES da leitura nova
 
         reg.update({
@@ -583,6 +678,7 @@ def main():
             "disponivel": dados.get("disponivel", True),
             "ultima_verificacao": agora_iso(),
             "erro": None,
+            "falhas_seguidas": 0,
             "cupom": cupom,
             "preco_normal": normal,
         })
